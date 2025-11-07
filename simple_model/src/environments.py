@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 
 
-class SimpleTelEnv(gym.Env):
+class ToyEnv_v0(gym.Env):
     def __init__(self, Nf, target_sequence, nv_max, off_by_lim):
         self.Nf = Nf # number of fields
         # self.T = 1 # 28800sec = 8hrs
