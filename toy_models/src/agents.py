@@ -1,5 +1,7 @@
 import gymnasium as gym
 from collections import defaultdict
+from buffer import ReplayBuffer
+import torch
 
 from typing import Tuple
 
@@ -8,7 +10,6 @@ class DQNAgent:
             self,
             env: gym.Env,
             replay_buffer: ReplayBuffer,
-            # net: nn.Module,
             device,
             ):
         """Base Agent class handling the interaction with the environment.
@@ -87,19 +88,22 @@ class DQNAgent:
 
         # interact with environment
         next_obs, reward, terminated, truncated, info = self.env.step(action)
+
         next_action_mask = info['action_mask']
 
         # save to experiences
         exp_args = self.obs, action, reward, next_obs, terminated, action_mask, next_action_mask
         self.replay_buffer.append(*exp_args)
 
-        # set next_obs to current obs for next step
-        self.obs = next_obs
-        self.info = info
-
         # if finished survey, reset
         if terminated or truncated:
             self.reset()
+
+        else:
+            # set next_obs to current obs for next step
+            self.obs = next_obs
+            self.info = info
+
         return reward, terminated
 
     def predict(self, nsteps):
