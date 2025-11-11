@@ -12,10 +12,8 @@ Experience = namedtuple(
 # Stores experiences
 class ReplayBuffer(object):
     def __init__(self, capacity, device):
-        self.buffer = deque([], maxlen=capacity)
-        self.full = False
+        self.buffer = deque(maxlen=capacity)
         self.device = device
-        self.pos = 0
 
     def __len__(self):
         return len(self.buffer) 
@@ -23,27 +21,22 @@ class ReplayBuffer(object):
     def append(self, *args):
         """Save a transition"""
         self.buffer.append(Experience(*args))
-        self.pos += 1
-        if self.pos == self.buffer.maxlen:
-            self.full = True
-            self.pos = 0
 
     def sample(self, batch_size):
         indices = np.random.choice(len(self.buffer), batch_size, replace=False)
-        obs, actions, rewards, next_obs, dones, action_masks, next_action_masks = zip(*(self.buffer[idx] for idx in indices))
+        batch = [self.buffer[idx] for idx in indices]
+        batch = Experience(*zip(*batch))
 
         return (
-            np.array(obs),
-            np.array(actions),
-            np.array(rewards, dtype=np.float32),
-            np.array(next_obs),
-            np.array(dones, dtype=bool),
-            np.array(action_masks),
-            np.array(next_action_masks)
+            np.array(batch.obs, dtype=np.float32),
+            np.array(batch.action, dtype=np.float32),
+            np.array(batch.reward, dtype=np.float32),
+            np.array(batch.next_obs, dtype=np.float32),
+            np.array(batch.done, dtype=np.bool_),
+            np.array(batch.action_mask, dtype=bool),
+            np.array(batch.next_action_mask, dtype=bool)
         )
     
     def reset(self):
-        # self.buffer.clear()
-        self.full = False
-        self.pos = 0
+        self.buffer.clear()
 
