@@ -31,7 +31,7 @@ def blanco_observer(time=None):
 
     return observer
 
-def get_source_ra_dec(source, time=None):
+def get_source_ra_dec(source, time=None, observer=None):
     """
     Get the astrophysical coordinates of a known source using pyephem.
 
@@ -41,6 +41,8 @@ def get_source_ra_dec(source, time=None):
         Source name. Options: "moon", "sun"
     at_time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
 
     Returns
     -------
@@ -49,7 +51,7 @@ def get_source_ra_dec(source, time=None):
     """
 
     # create observer at Blanco telescope
-    observer = blanco_observer(time=time)
+    observer = observer if observer is not None else blanco_observer(time=time)
 
     # grab ephem object for the source
     source = source.lower()
@@ -64,7 +66,7 @@ def get_source_ra_dec(source, time=None):
     body.compute(observer)
     return body.ra, body.dec
 
-def equatorial_to_topographic(ra, dec, time=None):
+def equatorial_to_topographic(ra, dec, time=None, observer=None):
     """
     Convert RA/Dec to Az/El for the Blanco telescope location.
 
@@ -76,6 +78,8 @@ def equatorial_to_topographic(ra, dec, time=None):
         Declination in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
 
     Returns
     -------
@@ -84,7 +88,7 @@ def equatorial_to_topographic(ra, dec, time=None):
     """
 
     # initialize observer location and time
-    observer = blanco_observer(time=time)
+    observer = observer if observer is not None else blanco_observer(time=time)
 
     # define position in equatorial coordinates
     source = ephem.FixedBody()
@@ -95,7 +99,7 @@ def equatorial_to_topographic(ra, dec, time=None):
     source.compute(observer)
     return source.az, source.alt
 
-def topographic_to_equatorial(az, el, time=None):
+def topographic_to_equatorial(az, el, time=None, observer=None):
     """
     Convert Az/El to RA/Dec for the Blanco telescope location.
 
@@ -107,6 +111,8 @@ def topographic_to_equatorial(az, el, time=None):
         Elevation in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
 
     Returns
     -------
@@ -115,7 +121,7 @@ def topographic_to_equatorial(az, el, time=None):
     """
 
     # initialize observer location and time
-    observer = blanco_observer(time=time)
+    observer = observer if observer is not None else blanco_observer(time=time)
 
     # compute topographic position for the observer
     return observer.radec_of(az, el)
