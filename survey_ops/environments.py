@@ -1,13 +1,12 @@
 from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
-from typing import Optional
 import numpy as np
 
 
 from typing import Optional
 import numpy as np
 
-class ToyEnv_v2(gym.Env):
+class TelescopeEnv_v0(gym.Env):
     """
     Environment compatible with ToyOfflineDatasetv2.
     """
@@ -15,12 +14,12 @@ class ToyEnv_v2(gym.Env):
         super().__init__()
         # instantiate static attributes
         self.nfields = dataset._nfields
-        self.coords_dict = dataset._field_coord_mapping
-        self.max_visits = 1
-        self.zenith = dataset._field_coord_mapping[-1]
-        self._n_obs_per_night = dataset._obs_per_night
+        self.id2pos = dataset._id2pos
+        self.max_visits = dataset._max_visits
+        self._n_obs_per_night = dataset._n_obs_per_night
         self.use_separation_reward = use_separation_reward
         self.use_field_id_reward = use_field_id_reward
+        self.target_field_ids = dataset._schedule_field_ids[0]
 
         # Initialize variable attributes - will be set in reset()
         self._init_to_nonstate()
@@ -29,8 +28,8 @@ class ToyEnv_v2(gym.Env):
         self.obs_dim = dataset._obs_dim
 
         self.observation_space = gym.spaces.Box(
-            low=np.min(dataset.obs),
-            high=np.max(dataset.obs),
+            low=-10, #np.min(dataset.obs),
+            high=np.max(dataset.obs)+1,
             shape=(self.obs_dim,),
             dtype=np.float32,
         )
@@ -74,11 +73,9 @@ class ToyEnv_v2(gym.Env):
         Returns:
         """
         assert self.action_space.contains(action), f"Invalid action {action}"
-        last_coord = self._coord
+        # last_coord = self._coord
         last_field_id = self._field_id
         self._update_obs(action)
-        if self._step_count == 0:
-            last_coord = self.zenith
         
         # ------------------- Calculate reward ------------------- #
         # Two reward components
@@ -88,21 +85,23 @@ class ToyEnv_v2(gym.Env):
         reward = 0
         # 1. Separation
         if self.use_separation_reward:
-            separation = np.linalg.norm(self._coord - last_coord)
-            low_sep_lim = 3
-            mid_sep_lim = 6
-            max_sep_lim = 10
+            pass
+        #     separation = np.linalg.norm(self._coord - last_coord)
+        #     low_sep_lim = 3
+        #     mid_sep_lim = 6
+        #     max_sep_lim = 10
 
-            if separation < low_sep_lim:
-                reward += .3
-            elif separation < mid_sep_lim:
-                reward += .2
-            elif separation < max_sep_lim:
-                reward += .1
+        #     if separation < low_sep_lim:
+        #         reward += .3
+        #     elif separation < mid_sep_lim:
+        #         reward += .2
+        #     elif separation < max_sep_lim:
+        #         reward += .1
         
         # 2. Field ID
         if self.use_field_id_reward:
-            field_id_diff = np.abs(last_field_id - self._field_id)
+            target_field = self.target_field_ids[self._step_count]
+            field_id_diff = np.abs(target_field - self._field_id)
             if field_id_diff == 0:
                 reward += 1
             elif field_id_diff <= 1:
@@ -127,8 +126,7 @@ class ToyEnv_v2(gym.Env):
 
     def _init_to_nonstate(self):
         self._step_count = -1
-        self._field_id = -1
-        self._coord = self.zenith
+        self._field_id = np.array([-1], dtype=np.float32)
         self._action_mask = np.ones(self.nfields, dtype=bool)
         self._visited = []
 
@@ -142,7 +140,7 @@ class ToyEnv_v2(gym.Env):
     def _update_obs(self, action):
         self._step_count += 1
         self._field_id = action
-        self._coord = np.array(self.coords_dict[action], dtype=np.float32)
+        self._coord = np.array(self.id2pos[action], dtype=np.float32)
         self._visited.append(action)
         self._update_action_mask(action)
 
@@ -152,7 +150,8 @@ class ToyEnv_v2(gym.Env):
         Returns:
             dict: Observation with agent and target positions
         """
-        obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
+        obs = np.array(self._field_id, dtype=np.float32)
+        # obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
         return obs
 
     def _get_info(self):

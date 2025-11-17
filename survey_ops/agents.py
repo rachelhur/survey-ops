@@ -1,6 +1,5 @@
 import gymnasium as gym
 from collections import defaultdict
-from buffer import ReplayBuffer
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -51,7 +50,7 @@ class Agent:
             episode_reward = 0
             terminated = False
             truncated = False
-            obs_list = [obs]
+            obs_list = [obs[0]]
             rewards_list = []
             i = 0
 
@@ -65,7 +64,7 @@ class Agent:
                 rewards_list.append(reward)
                 episode_reward += reward
                 i += 1
-            # print(obs_list)
+            print(obs_list)
             observations.update({f'ep-{episode}': np.array(obs_list)})
             rewards.update({f'ep-{episode}': np.array(rewards_list)})
             episode_rewards.append(episode_reward)
