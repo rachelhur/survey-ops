@@ -8,7 +8,7 @@ import numpy as np
 
 class TelescopeEnv_v0(gym.Env):
     """
-    Environment compatible with ToyOfflineDatasetv2.
+    Environment compatible with state input = (field id)
     """
     def __init__(self, dataset, use_separation_reward=True, use_field_id_reward=True):
         super().__init__()
@@ -24,9 +24,7 @@ class TelescopeEnv_v0(gym.Env):
         # Initialize variable attributes - will be set in reset()
         self._init_to_nonstate()
        
-        # Define observation space - (step (size 1), coords (size 2), nvisits array)
-        self.obs_dim = dataset._obs_dim
-
+        self.obs_dim = dataset.obs_dim
         self.observation_space = gym.spaces.Box(
             low=-10, #np.min(dataset.obs),
             high=np.max(dataset.obs)+1,
@@ -78,10 +76,6 @@ class TelescopeEnv_v0(gym.Env):
         self._update_obs(action)
         
         # ------------------- Calculate reward ------------------- #
-        # Two reward components
-            # 1: separation (50%)
-            # 2: field_id (50%)
-
         reward = 0
         # 1. Separation
         if self.use_separation_reward:
@@ -100,7 +94,7 @@ class TelescopeEnv_v0(gym.Env):
         
         # 2. Field ID
         if self.use_field_id_reward:
-            target_field = self.target_field_ids[self._step_count]
+            target_field = self.target_field_ids[self._obs_idx]
             field_id_diff = np.abs(target_field - self._field_id)
             if field_id_diff == 0:
                 reward += 1
@@ -112,7 +106,7 @@ class TelescopeEnv_v0(gym.Env):
 
         # end condition
         truncated = False
-        terminated = self._step_count + 1 >= self._n_obs_per_night
+        terminated = self._obs_idx + 1 >= self._n_obs_per_night
 
         # get obs and info
         next_obs = self._get_obs()
@@ -125,8 +119,8 @@ class TelescopeEnv_v0(gym.Env):
     # ------------------------------------------------------------ #
 
     def _init_to_nonstate(self):
-        self._step_count = -1
-        self._field_id = np.array([-1], dtype=np.float32)
+        self._obs_idx = -1
+        self._field_id = -1
         self._action_mask = np.ones(self.nfields, dtype=bool)
         self._visited = []
 
@@ -138,7 +132,7 @@ class TelescopeEnv_v0(gym.Env):
             self._action_mask[action] = False
 
     def _update_obs(self, action):
-        self._step_count += 1
+        self._obs_idx += 1
         self._field_id = action
         self._coord = np.array(self.id2pos[action], dtype=np.float32)
         self._visited.append(action)
@@ -150,7 +144,7 @@ class TelescopeEnv_v0(gym.Env):
         Returns:
             dict: Observation with agent and target positions
         """
-        obs = np.array(self._field_id, dtype=np.float32)
+        obs = np.array([self._obs_idx/self._n_obs_per_night, self._field_id/self.nfields], dtype=np.float32)
         # obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
         return obs
 

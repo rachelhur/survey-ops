@@ -35,6 +35,18 @@ class Agent:
             self.loss_history.append(loss)
             self.q_history.append(q_val)
 
+            if i_epoch % 100 == 0:
+                with torch.no_grad():
+                    # Test on a batch
+                    obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
+                    obs = torch.tensor(obs)
+                    all_q_vals = self.algorithm.policy_net(obs)
+                    all_q_vals[~action_masks] = float('-inf')
+                    predicted_actions = all_q_vals.argmax(dim=1)
+                    accuracy = (predicted_actions == expert_actions).float().mean()
+                    self.accuracies.append(accuracy)
+                    print(f"Epoch {i_epoch}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}")
+            
         save_filepath = outdir + self.name + f'-v{version_num}.pt'
         self.save(save_filepath)
 
@@ -44,26 +56,28 @@ class Agent:
         episode_rewards = []
         observations = {}
         rewards = {}
+        self.algorithm.policy_network.eval()
         
         for episode in tqdm(range(num_episodes)):
             obs, info = env.reset()
             episode_reward = 0
             terminated = False
             truncated = False
-            obs_list = [obs[0]]
+            obs_list = [obs]
             rewards_list = []
             i = 0
 
             while not (terminated or truncated):
-                action_mask = info.get('action_mask', None)
-                action = self.act(obs, action_mask, epsilon=None)  # greedy
-                obs, reward, terminated, truncated, info = env.step(action)
-                obs_list.append(obs)
-                if terminated:
-                    print(f'terminated at step {i}')
-                rewards_list.append(reward)
-                episode_reward += reward
-                i += 1
+                with torch.no_grad():
+                    action_mask = info.get('action_mask', None)
+                    action = self.act(obs, action_mask, epsilon=None)  # greedy
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    obs[0] *= env.unwrapped._n_obs_per_night
+                    obs[1] *= env.unwrapped.nfields
+                    obs_list.append(obs)
+                    rewards_list.append(reward)
+                    episode_reward += reward
+                    i += 1
             print(obs_list)
             observations.update({f'ep-{episode}': np.array(obs_list)})
             rewards.update({f'ep-{episode}': np.array(rewards_list)})
