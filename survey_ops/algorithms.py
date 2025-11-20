@@ -13,6 +13,13 @@ class AlgorithmBase:
 
     def select_action(self):
         raise NotImplementedError
+
+    def save(self, filepath):
+        torch.save({'policy_net': self.policy_net.state_dict()}, filepath)
+    
+    def load(self, filepath):
+        checkpoint = torch.load(filepath, map_location=self.device)
+        self.policy_net.load_state_dict(checkpoint['policy_net'])
     
 class DDQN(AlgorithmBase):
     """
@@ -33,12 +40,11 @@ class DDQN(AlgorithmBase):
     """
 
     def __init__(self, obs_dim, action_dim, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
-                 use_lr_scheduler=False, num_steps=None, mode='memorization', **optimizer_kwargs):
+                 use_lr_scheduler=False, num_steps=None, **optimizer_kwargs):
         super().__init__()
         self.gamma = gamma
         self.tau = tau
         self.device = device
-        self.mode = mode
 
         self.policy_net = DQN(obs_dim, action_dim, hidden_dim).to(device)
         self.target_net = DQN(obs_dim, action_dim, hidden_dim).to(device)
@@ -48,7 +54,7 @@ class DDQN(AlgorithmBase):
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=False, **optimizer_kwargs)
         self.use_lr_scheduler = use_lr_scheduler
 
-        # #TODO
+        # TODO: I want to input number of epochs for num_steps for cosine annealing T_max param
         if use_lr_scheduler:
             lr_scheduler_kwargs = {'T_max': num_steps if num_steps is not None else 100_000, 'eta_min': 1e-6}
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs)
@@ -57,12 +63,10 @@ class DDQN(AlgorithmBase):
     def train_step(self, batch):
         
         obs, actions, rewards, next_obs, dones, action_masks = batch
-        in_memorization_mode = self.mode == 'memorization'
         # convert to tensors
         obs = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
-        if not in_memorization_mode:
-            rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+        rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
         next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
         dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
         action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
@@ -137,30 +141,26 @@ class DDQN(AlgorithmBase):
             action = torch.argmax(q_values).item()
         return int(action)
     
-    def save(self, filepath):
-        torch.save({'policy_net': self.policy_net.state_dict()}, filepath)
-    
-    def load(self, filepath):
-        checkpoint = torch.load(filepath, map_location=self.device)
-        self.policy_net.load_state_dict(checkpoint['policy_net'])
-    
 
-class BehavioralCloning(AlgorithmBase):
-    def __init__(self, obs_dim, num_actions, hidden_size, learning_rate=1e-3, device='cpu'):
-        self.policy_network = DDQN(obs_dim, num_actions, hidden_size)
-        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=learning_rate)
-        self.loss_fxn = torch.nn.CrossEntropyLoss()  # For discrete actions
-        self.lr_scheduler = None
+class BehaviorCloning(AlgorithmBase):
+    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, device='cpu'):
         self.device = device
-        self.policy_network.to(device)
+        self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
+        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.loss_fxn = torch.nn.CrossEntropyLoss(reduction='mean') if loss_fxn is None else loss_fxn
+        self.lr_scheduler = None
         
-    def train_step(self, offline_dataset, epochs=100, batch_size=32, verbose=True):
+    def train_step(self, batch):
         """
         Train the policy to mimic expert actions from offline data
         """
         obs, expert_actions, rewards, next_obs, dones, action_masks = batch
-
-        action_logits = self.policy_network(obs)
+        
+        # convert to tensors
+        obs = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32)
+        expert_actions = torch.tensor(expert_actions, device=self.device, dtype=torch.long) # needs to be long for .gather()
+        action_logits = self.policy_net(obs)
+        
         loss = self.loss_fxn(action_logits, expert_actions)
 
         # Backward pass
@@ -168,45 +168,45 @@ class BehavioralCloning(AlgorithmBase):
         loss.backward()
         self.optimizer.step()
 
-        return loss 
+        return loss.item(), 0.0
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
             obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-            action_logits = self.policy_net(obs).squeeze(0)
+            action_logits = self.policy_net(obs)
             # mask invalid actions
-            mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool)
+            mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool).unsqueeze(0)
             action_logits[~mask] = float('-inf')
             action = torch.argmax(action_logits, dim=1)
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
 
-    def predict(self, state):
-        """
-        Get action for a given state
-        """
-        self.policy_network.eval()
-        with torch.no_grad():
-            state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
-            if len(state_tensor.shape) == 1:
-                state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
+    # def predict(self, state):
+    #     """
+    #     Get action for a given state
+    #     """
+    #     self.policy_net.eval()
+    #     with torch.no_grad():
+    #         state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
+    #         if len(state_tensor.shape) == 1:
+    #             state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
                 
-            action_logits = self.policy_network(state_tensor)
-            action = torch.argmax(action_logits, dim=1)
-            return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
+    #         action_logits = self.policy_net(state_tensor)
+    #         action = torch.argmax(action_logits, dim=1)
+    #         return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
     
-    def evaluate(self, test_dataset):
-        """
-        Evaluate the trained policy on test data
-        """
-        states = torch.tensor(np.array([d['state'] for d in test_dataset]), dtype=torch.float32)
-        expert_actions = torch.tensor([d['expert_action'] for d in test_dataset], dtype=torch.long)
+    # def evaluate(self, test_dataset):
+    #     """
+    #     Evaluate the trained policy on test data
+    #     """
+    #     states = torch.tensor(np.array([d['state'] for d in test_dataset]), dtype=torch.float32)
+    #     expert_actions = torch.tensor([d['expert_action'] for d in test_dataset], dtype=torch.long)
         
-        states = states.to(self.device)
-        expert_actions = expert_actions.to(self.device)
+    #     states = states.to(self.device)
+    #     expert_actions = expert_actions.to(self.device)
         
-        with torch.no_grad():
-            action_logits = self.policy_network(states)
-            predicted_actions = torch.argmax(action_logits, dim=1)
-            accuracy = (predicted_actions == expert_actions).float().mean().item()
+    #     with torch.no_grad():
+    #         action_logits = self.policy_net(states)
+    #         predicted_actions = torch.argmax(action_logits, dim=1)
+    #         accuracy = (predicted_actions == expert_actions).float().mean().item()
         
-        return accuracy
+    #     return accuracy
