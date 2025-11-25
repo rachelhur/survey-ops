@@ -64,7 +64,7 @@ class TelescopeDatasetv0:
         self._next_obs_indices = schedule.index.to_numpy()[np.newaxis, np.newaxis, 1:]
         self._next_field_ids = schedule.field_id.values[1:][np.newaxis, np.newaxis, :]
 
-        # normalize inputs to dqn network
+        # normalize inputs to network
         self.obs = np.concatenate((self._field_ids, self._obs_indices), axis=0)
         self.next_obs = np.concatenate((self._next_field_ids, self._next_obs_indices), axis=0)
 

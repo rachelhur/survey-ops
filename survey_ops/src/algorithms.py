@@ -42,6 +42,7 @@ class DDQN(AlgorithmBase):
     def __init__(self, obs_dim, action_dim, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
                  use_lr_scheduler=False, num_steps=None, **optimizer_kwargs):
         super().__init__()
+        self.name = 'DDQN'
         self.gamma = gamma
         self.tau = tau
         self.device = device
@@ -144,6 +145,7 @@ class DDQN(AlgorithmBase):
 
 class BehaviorCloning(AlgorithmBase):
     def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, device='cpu'):
+        self.name = 'BehaviorCloning'
         self.device = device
         self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
