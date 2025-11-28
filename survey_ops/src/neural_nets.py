@@ -38,7 +38,26 @@ def exponential_schedule(eps_start: float, eps_end: float, decay_rate: float, t:
         raise Exception("Error in exponential_schedule")
 
 class DQN(nn.Module):
-    '''Sends observations to action-value space'''
+    """Deep Q-Network mapping observations to action-values.
+
+    This network implements a simple 3-layer MLP used to approximate the
+    Q-function Q(s, a). It takes an observation vector as input and outputs a
+    vector of Q-values - one for each discrete action.
+
+    Architecture:
+        Input → Linear → Activation → Linear → Activation → Linear → Q-values
+
+    Attributes:
+        activation (callable):
+            Nonlinearity applied after the first two linear layers.
+            Defaults to ReLU if not provided.
+        layer1 (nn.Linear):
+            First fully connected layer.
+        layer2 (nn.Linear):
+            Second fully connected layer.
+        layer3 (nn.Linear):
+            Output layer producing Q-values for all actions.
+    """
     def __init__(self, observation_dim, action_dim, hidden_dim=128, activation=None):
         super(DQN, self).__init__()
         self.activation = F.relu if activation is None else activation 

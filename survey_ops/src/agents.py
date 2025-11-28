@@ -11,12 +11,22 @@ class Agent:
     """
     A simple, generic agent/wrapper for fitting and evaluating Q-learning algorithms. 
 
-    Args
-    ----
-        algorithm (Algorithm): The Q-learning algorithm
-        env (gymnasium.Env): The environment in which the agent will act.
-        name (str): File name prefix for policy net weights
-        normalize_obs (bool): Whether or not to normalize observations
+    This class abstracts training loops, evaluation, saving/loading, and interaction with environment. It expects an underlying `algorithm` object that
+    implements:
+        - `algorithm.train_step(batch)`
+        - `algorithm.select_action(obs, mask, epsilon)`
+        - `algorithm.policy_net`
+        - `algorithm.save(path)`
+        - `algorithm.load(path)`
+
+    Attributes
+    ----------
+        algorithm (Algorithm): Q-learning algorithm implementing train + act.
+        device (str): Device used by the algorithm ('cpu' or 'cuda').
+        normalize_obs (bool): Whether to normalize observations before acting.
+        env (gym.Env | None): Optional environment for evaluation.
+        outdir (str): Directory for saving weights and training/evaluation logs.
+
     """
     def __init__(
             self,
@@ -25,27 +35,65 @@ class Agent:
             outdir,
             env: gym.Env = None,
             ):
+        """
+        Args
+        ----
+            algorithm (Algorithm): The Q-learning algorithm
+            env (gymnasium.Env): The environment in which the agent will act.
+            outdir (str): directory to save results
+            normalize_obs (bool): Whether or not to normalize observations
+        """
         self.algorithm = algorithm
         self.device = algorithm.device
         self.normalize_obs = normalize_obs
         self.env = env
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
         self.outdir = outdir
+        
 
-    def fit(self, dataset, num_epochs, batch_size):
+    def fit(self, dataset, num_epochs, batch_size, eval_freq=100):
+        """Trains the agent on a transition dataset.
+
+        Uses repeated sampling from a dataset that implements `sample(batch_size)`
+        to perform Q-learning updates. Periodically evaluates accuracy on
+        expert actions to monitor learning progress.
+
+        Args:
+            dataset (object):
+                Must implement `sample(batch_size)` returning a full transition:
+                (obs, actions, rewards, next_obs, dones, action_masks).
+            num_epochs (int):
+                Number of passes through the dataset (used to compute steps).
+            batch_size (int):
+                Number of transitions per optimization step.
+            eval_freq (int):
+                Frequency (in optimization steps) at which evaluation batches
+                are sampled and accuracy is recorded.
+
+        Saves:
+            - `<outdir>/weights-v0.pt`: Final model weights.
+            - `<outdir>/train_metrics.pkl`: Dictionary containing:
+                - `loss_history`
+                - `q_history`
+                - `test_acc_history`
+        """
+        dataset_size = np.prod(dataset.obs.shape[1:])
+        total_steps = int(num_epochs * dataset_size / batch_size)
         train_metrics = {
             'loss_history': [],
             'q_history': [],
             'test_acc_history': [] 
         }
 
-        for i_epoch in tqdm(range(num_epochs)):
+        for i_step in tqdm(range(total_steps)):
             batch = dataset.sample(batch_size)
             
             loss, q_val = self.algorithm.train_step(batch)
             train_metrics['loss_history'].append(loss)
             train_metrics['q_history'].append(q_val)
 
-            if i_epoch % 100 == 0:
+            if i_step % eval_freq == 0:
                 with torch.no_grad():
                     # Test on a batch
                     obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
@@ -56,7 +104,7 @@ class Agent:
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())
-                    print(f"Epoch {i_epoch}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}")
+                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}")
             
         version_num = 0
         save_filepath = self.outdir + 'weights' + f'-v{version_num}.pt'
@@ -67,7 +115,29 @@ class Agent:
 
     
     def evaluate(self, env, num_episodes):
-        #TODO eval metric updating as attribute
+        """Evaluates the agent in an environment for multiple episodes.
+
+        Runs greedy (epsilon-free) policy evaluation using the current
+        Q-network. Tracks rewards and observations per episode, as well as
+        summary statistics.
+
+        Args:
+            env (gym.Env):
+                Gymnasium environment with `.reset()` and `.step()` APIs.
+                Must supply `info['action_mask']` if action masking is required.
+            num_episodes (int):
+                Number of rollout episodes to evaluate.
+
+        Saves:
+            `<outdir>/eval_metrics.pkl` containing:
+                - `mean_reward`
+                - `std_reward`
+                - `min_reward`
+                - `max_reward`
+                - `episode_rewards` (list)
+                - `observations` (dict of arrays per episode)
+                - `rewards` (dict of reward arrays per episode)
+        """
         # evaluation metrics
         observations = {}
         rewards = {}
@@ -86,7 +156,6 @@ class Agent:
 
             while not (terminated or truncated):
                 with torch.no_grad():
-                    print(obs)
                     obs = obs / env.unwrapped.norm
                     action_mask = info.get('action_mask', None)
                     action = self.act(obs, action_mask, epsilon=None)  # greedy
@@ -112,15 +181,38 @@ class Agent:
 
         with open(self.outdir + 'eval_metrics.pkl', 'wb') as handle:
             pickle.dump(eval_metrics, handle)
-            print('dumped ')
+            print(f'eval_metrics.pkl saved in {self.outdir}')
 
     def act(self, obs, action_mask, epsilon):
+        """Selects an action using the underlying algorithm.
+
+        Args:
+            obs (array-like):
+                Current observation (normalized if applicable).
+            action_mask (array-like | None):
+                Boolean mask indicating which actions are legal.
+            epsilon (float | None):
+                Epsilon for epsilon-greedy exploration. If None, selects greedily.
+
+        Returns:
+            int: Selected action index.
+        """
         return self.algorithm.select_action(obs, action_mask, epsilon)
     
     def save(self, filepath):
+        """Saves algorithm parameters to a file.
+
+        Args:
+            filepath (str): Destination path for serialized model weights.
+        """
         self.algorithm.save(filepath)
     
     def load(self, filepath):
+        """Loads algorithm parameters from a file.
+
+        Args:
+            filepath (str): Path to previously saved model weights.
+        """
         self.algorithm.load(filepath)
 
     # def get_next_available_version_filename(base_filename):
