@@ -11,6 +11,47 @@ def reward_func_v0():
 
 from torch.utils.data import DataLoader, RandomSampler
     
+class TransitionDataset(torch.utils.data.Dataset):
+    def __init__(self, transitions):
+        self.transitions = transitions
+
+    def __len__(self):
+        return len(self.transitions)
+
+    def __getitem__(self, idx):
+        return self.transitions[idx]
+
+
+class TelescopeDatasetv1:
+    """
+    Upgrade of v0. Constructs a dataset for torch DataLoader
+    """
+    def __init__(self, schedule, id2pos, reward_func=None, normalize_obs=True, device='cpu'):
+        dataset_array = dataset_array
+        dataset_tuple = [tuple(row) for row in dataset_array]
+        raise NotImplementedError
+    
+    def _get_rewards(self):
+        raise NotImplementedError
+    
+    def _get_action_masks(self):
+        raise NotImplementedError
+
+    def __len__(self):
+        raise NotImplementedError
+
+    def get_dataloader(self, batch_size):
+        loader = DataLoader(
+            self.dataset,
+            batch_size,
+            sampler=RandomSampler(
+                dataset,
+                replacement=True,
+                num_samples=10**10,
+            ),
+            drop_last=True,
+        )
+
 
 class TelescopeDatasetv0:
     """
@@ -142,6 +183,7 @@ class TelescopeDatasetv0:
         """Randomly samples a batch of transitions. Sampling is performed by uniformly selecting a random night and a random observation step
             within that night
         """
+        #TODO should flatten transition dataset first, then sample uniformly
         night_indices = np.random.choice(self._n_nights, batch_size, replace=True)
         obs_indices = np.random.choice(self._n_obs_per_night - 1, batch_size)
         return (
@@ -151,45 +193,4 @@ class TelescopeDatasetv0:
             np.array(self.next_obs[:, night_indices, obs_indices]/self.norm, dtype=np.float32).T,
             np.array(self.dones[night_indices, obs_indices], dtype=np.bool_),
             np.array(self.action_masks[night_indices, obs_indices], dtype=bool),
-        )
-    
-class TransitionDataset(torch.utils.data.Dataset):
-    def __init__(self, transitions):
-        self.transitions = transitions
-
-    def __len__(self):
-        return len(self.transitions)
-
-    def __getitem__(self, idx):
-        return self.transitions[idx]
-
-
-class TelescopeDatasetv1:
-    """
-    Upgrade of v0. Constructs a dataset for torch DataLoader
-    """
-    def __init__(self, schedule, id2pos, reward_func=None, normalize_obs=True, device='cpu'):
-        dataset_array = dataset_array
-        dataset_tuple = [tuple(row) for row in dataset_array]
-        raise NotImplementedError
-    
-    def _get_rewards(self):
-        raise NotImplementedError
-    
-    def _get_action_masks(self):
-        raise NotImplementedError
-
-    def __len__(self):
-        raise NotImplementedError
-
-    def get_dataloader(self, batch_size):
-        loader = DataLoader(
-            self.dataset,
-            batch_size,
-            sampler=RandomSampler(
-                dataset,
-                replacement=True,
-                num_samples=10**10,
-            ),
-            drop_last=True,
         )
