@@ -6,3 +6,8 @@ __pycache__/
 
 # macOS files
 .DS_Store
+
+# large files
+*.zip
+*.gz
+*.pkl
