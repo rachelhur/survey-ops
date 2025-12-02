@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, RandomSampler
 
 import sys
 sys.path.append('../survey_ops/utils')
@@ -9,7 +10,6 @@ from torch.utils.data import Dataset, TensorDataset
 def reward_func_v0():
     raise NotImplementedError
 
-from torch.utils.data import DataLoader, RandomSampler
     
 class TransitionDataset(torch.utils.data.Dataset):
     def __init__(self, transitions):
