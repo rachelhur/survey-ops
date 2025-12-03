@@ -52,7 +52,7 @@ class Agent:
         self.outdir = outdir
         
 
-    def fit(self, dataset, num_epochs, batch_size, eval_freq=100):
+    def fit(self, num_epochs, dataset=None, batch_size=None, dataloader=None, eval_freq=100):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`
@@ -78,29 +78,60 @@ class Agent:
                 - `q_history`
                 - `test_acc_history`
         """
-        dataset_size = np.prod(dataset.obs.shape[1:])
-        total_steps = int(num_epochs * dataset_size / batch_size)
+        # assert dataset is not None and dataloader is not None
+        if dataloader is not None:
+            assert batch_size is not None
+
         train_metrics = {
             'loss_history': [],
             'q_history': [],
             'test_acc_history': [] 
         }
 
+        if dataloader is not None:
+            dataset_size = len(dataloader.dataset)
+            total_steps = int(num_epochs * dataset_size)
+            loader_iter = iter(dataloader)  # create iterator
+        else:
+            dataset_size = np.prod(dataset.obs.shape[1:])
+            total_steps = int(num_epochs * dataset_size / batch_size)
+            loader_iter = None  # not used for manual sampling
+
         for i_step in tqdm(range(total_steps)):
-            batch = dataset.sample(batch_size)
-            
+            if dataloader is not None:
+                try:
+                    batch = next(loader_iter)
+                except StopIteration:
+                    loader_iter = iter(dataloader)
+                    batch = next(loader_iter)
+            else:
+                batch = dataset.sample(batch_size)
+
             loss, q_val = self.algorithm.train_step(batch)
             train_metrics['loss_history'].append(loss)
             train_metrics['q_history'].append(q_val)
 
             if i_step % eval_freq == 0:
                 with torch.no_grad():
+                    if dataloader is not None:
+                        # --- evaluation from dataloader ---
+                        try:
+                            eval_batch = next(eval_iter)
+                        except (NameError, StopIteration):
+                            eval_iter = iter(dataloader)
+                            eval_batch = next(eval_iter)
+                        eval_obs, expert_actions, _, _, _, eval_masks = eval_batch
+                    else:
+                        # --- old method fallback ---
+                        eval_obs, expert_actions, _, _, _, eval_masks = dataset.sample(batch_size)
+
                     # Test on a batch
-                    obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
-                    obs = torch.tensor(obs, device=self.device)
+                    eval_obs = torch.tensor(eval_obs, device=self.device)
                     expert_actions = torch.tensor(expert_actions, device=self.device)
-                    all_q_vals = self.algorithm.policy_net(obs)
-                    all_q_vals[~action_masks] = float('-inf')
+                    all_q_vals = self.algorithm.policy_net(eval_obs)
+                    #TODO include back in when moving to other algorithms besides behavior cloning
+                    # might cause crazy evaluative behavior...
+                    # all_q_vals[~action_masks] = float('-inf')
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())

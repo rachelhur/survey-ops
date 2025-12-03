@@ -1,25 +1,214 @@
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler
+from collections import defaultdict
+
 
 import sys
 sys.path.append('../survey_ops/utils')
-import ephemerides
+from ephemerides import *
+
+import pandas as pd
 
 def reward_func_v0():
     raise NotImplementedError
 
-    
-class TransitionDataset(torch.utils.data.Dataset):
-    def __init__(self, transitions):
-        self.transitions = transitions
+def standardize(data):
+    return (data - data.mean(axis=0)) / data.std(axis=0)
+
+class OfflineDataset(torch.utils.data.Dataset):
+    def __init__(self, 
+                df: pd.DataFrame, 
+                num_bins_1d = 10,
+                normalize_state: bool = True, 
+                specific_years: list = None,
+                specific_months: list = None,
+                specific_days: list = None,
+                specific_filters: list = None
+                ):
+        self.state_vars = ['az', 'el', 'sun_az', 'sun_el', 'moon_az', 'moon_el', 'airmass', 'ha'] # time left in night
+        self.normalize_state = normalize_state
+
+        # Add timestamps column to df and sort df by timestamp (increasing)
+        utc = pd.to_datetime(df['datetime'], utc=True)
+        timestamps = (utc.astype('int64') // 10**9).values
+        df['timestamp'] = timestamps
+        df = df.sort_values(by='timestamp')
+        
+        # Set the DataFrame index as its datetime, and remove any "observations" made in 1970
+        df = df.set_index('datetime')
+        df = df[df.index.year != 1970]
+
+        # Get observations for specific years, days, filters, etc.
+        if specific_years is not None:
+            df = df[df.index.year.isin(specific_years)]
+        if specific_months is not None:
+            df = df[df.index.month.isin(specific_months)]
+        if specific_days is not None:
+            df = df[df.index.day.isin(specific_days)]
+        if specific_filters is not None:
+            df = df[df['filter'].isin(specific_filters)]
+        self._df = df # save for diagnostics - #TODO remove when all is tested
+        
+        # Ensure all data are 32-bit precision before training
+        for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
+            cols = df.select_dtypes(include=[str_bit]).columns
+            df[cols] = df[cols].astype(np_bit)
+
+        # Group observations by observation night
+        groups = df.groupby(df.index.normalize())
+        self._groups = groups
+        self.unique_nights = groups.groups.keys()
+        self.n_nights = groups.ngroups
+        self.n_obs_per_night = groups.size() # nights have different numbers of observations
+        
+        # Set dataset-wide (across observation nights) attributes
+        self.n_obs_tot = len(df)
+        self.num_transitions = len(df) # size of dataset
+        self.num_actions = int(num_bins_1d**2)
+        
+        # Get transition variables
+        states, next_states = self._construct_states(groups)
+        actions = self._construct_actions(next_states, num_bins_1d)
+        rewards = self._construct_rewards(groups)
+        dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
+        self._done_indices = np.where(states[:, 0] == -1)[0][1:] - 1
+        dones[self._done_indices] = True
+        action_masks = self._construct_action_masks()
+
+        # Save transitions as tensors and instatiate as attributes
+        self.states = torch.tensor(states, dtype=torch.float32)
+        self.next_states = torch.tensor(next_states, dtype=torch.float32)
+        self.actions = torch.tensor(actions, dtype=torch.int32)
+        self.rewards = torch.tensor(rewards, dtype=torch.float32)
+        self.dones = torch.tensor(dones, dtype=torch.bool)
+        self.action_masks = torch.tensor(action_masks, dtype=torch.bool)
+        
+        # Set dimension of observation
+        self.obs_dim = self.states.shape[-1]
+        if self.normalize_state:
+            self.means = torch.mean(self.next_states, axis=0)
+            self.stds = torch.std(self.next_states, axis=0)
+            self.next_states = (self.next_states - self.means) / self.stds
+
+            mask_null = self.states == 0
+            new_states = self.states.clone()
+            new_states = (new_states - self.means) / self.stds
+            new_states[mask_null] = 0.
+            self.states = new_states
+        else:
+            self.means = 0.
+            self.stds = 1.
 
     def __len__(self):
-        return len(self.transitions)
+        return self.states.shape[0]
 
     def __getitem__(self, idx):
-        return self.transitions[idx]
+        transition = (
+            self.states[idx],
+            self.actions[idx],
+            self.rewards[idx],
+            self.next_states[idx],
+            self.dones[idx],
+            self.action_masks[idx]
+        )
+        return transition
 
+    def _construct_states(self, groups):
+        # State vars
+        az = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
+        el = np.zeros_like(az, dtype=np.float32)
+        sun_az = np.zeros_like(az, dtype=np.float32)
+        sun_el = np.zeros_like(az, dtype=np.float32)
+        moon_az = np.zeros_like(az, dtype=np.float32)
+        moon_el = np.zeros_like(az, dtype=np.float32)
+        airmass = np.zeros_like(az, dtype=np.float32)
+        ha = np.zeros_like(az, dtype=np.float32)
+        null_obs_indices = []
+
+        # Extra info
+        # ra = -1 * np.ones_like(az, dtype=np.float32)
+        # dec = 
+        
+        for i, ((day, subdf), (_, idxs)) in enumerate(zip(groups, groups.indices.items())):
+            indices = idxs + i + 1
+            null_obs_indices.append(idxs[0] + i)
+            timestamps = subdf['timestamp']
+            az[indices] = subdf['az'].values
+            el[indices] = 90.0 - subdf['zd'].values
+            airmass[indices] = subdf['airmass'].values
+            ha[indices] = subdf['ha'].values
+            
+            # Get sun and moon az&el
+            for idx, time in zip(indices, timestamps):
+                sun_ra, sun_dec = get_source_ra_dec('sun', time=time)
+                moon_ra, moon_dec = get_source_ra_dec('moon', time=time)
+                sun_az[idx], sun_el[idx] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
+                moon_az[idx], moon_el[idx] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
+                
+        self.az = az
+        self.el = el
+        self.sun_az = sun_az
+        self.sun_el = sun_el
+        self.moon_az = moon_az
+        self.moon_el = moon_el
+        self.airmass = airmass
+        self.ha = ha
+        self.null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
+        self.null_mask = np.ones_like(self.az, dtype=bool)
+        self.null_mask[self.null_obs_indices] = False
+        all_states = np.vstack((az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha)).T
+        self._all_states = all_states
+        states = np.delete(all_states, self.null_obs_indices[1:] - 1, axis=0)[:-1]
+        next_states = np.delete(all_states, self.null_obs_indices, axis=0)
+        return states, next_states
+
+    def _construct_actions(self, next_states, num_bins_1d):
+        az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
+        # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
+        el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
+        # az_centers = el_edges[:-1] + (el_edges[1] - el_edges[0])/2
+
+        i_x = np.digitize(next_states[:, 0], az_edges).astype(np.int32) - 1
+        i_y = np.digitize(next_states[:, 1], el_edges).astype(np.int32) - 1
+        bin_ids = i_x + i_y * (num_bins_1d)
+        self.az_edges = az_edges
+        self.el_edges = el_edges
+        
+        id2azel = defaultdict(list)
+        for az, el, bin_id in zip(next_states[:, 0], next_states[:, 1], bin_ids):
+            id2azel[bin_id].append((az, el))            
+        self.id2azel = dict(sorted(id2azel.items()))
+
+        id2radec = defaultdict(list)
+        for ra, dec, bin_id in zip(self._df['ra'].values, self._df['dec'].values, bin_ids):
+            id2radec[bin_id].append((ra, dec))
+        self.id2radec = dict(sorted(id2radec.items()))
+        return bin_ids
+
+    def _construct_rewards(self, groups):
+        rewards = np.ones(self.num_transitions)
+        for ((day, subdf), (_, idxs)) in zip(groups, groups.indices.items()):
+            rewards[idxs] = subdf['teff']
+        return rewards
+
+    def _construct_action_masks(self):
+        return np.ones((self.num_transitions, self.num_actions), dtype=bool)
+
+    def get_dataloader(self, batch_size, num_workers, pin_memory):
+        loader = DataLoader(
+            self,
+            batch_size,
+            sampler=RandomSampler(
+                self,
+                replacement=True,
+                num_samples=10**10,
+            ),
+            drop_last=True, # drops last non-full batch
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+        return loader
 
 class TelescopeDatasetv1:
     """
