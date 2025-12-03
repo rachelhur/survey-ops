@@ -5,7 +5,6 @@ from torch.utils.data import DataLoader, RandomSampler
 import sys
 sys.path.append('../survey_ops/utils')
 import ephemerides
-from torch.utils.data import Dataset, TensorDataset
 
 def reward_func_v0():
     raise NotImplementedError
