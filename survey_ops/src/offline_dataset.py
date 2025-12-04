@@ -26,7 +26,7 @@ class OfflineDataset(torch.utils.data.Dataset):
                 specific_days: list = None,
                 specific_filters: list = None
                 ):
-        self.state_vars = ['az', 'el', 'sun_az', 'sun_el', 'moon_az', 'moon_el', 'airmass', 'ha'] # time left in night
+        self.state_vars = ['az', 'el', 'sun_az', 'sun_el', 'moon_az', 'moon_el', 'airmass', 'ha', 'timestamp'] # time left in night
         self.normalize_state = normalize_state
 
         # Add timestamps column to df and sort df by timestamp (increasing)
@@ -34,29 +34,34 @@ class OfflineDataset(torch.utils.data.Dataset):
         timestamps = (utc.astype('int64') // 10**9).values
         df['timestamp'] = timestamps
         df = df.sort_values(by='timestamp')
-        
-        # Set the DataFrame index as its datetime, and remove any "observations" made in 1970
-        df = df.set_index('datetime')
-        df = df[df.index.year != 1970]
 
-        # Get observations for specific years, days, filters, etc.
-        if specific_years is not None:
-            df = df[df.index.year.isin(specific_years)]
-        if specific_months is not None:
-            df = df[df.index.month.isin(specific_months)]
-        if specific_days is not None:
-            df = df[df.index.day.isin(specific_days)]
-        if specific_filters is not None:
-            df = df[df['filter'].isin(specific_filters)]
-        self._df = df # save for diagnostics - #TODO remove when all is tested
-        
         # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
             cols = df.select_dtypes(include=[str_bit]).columns
             df[cols] = df[cols].astype(np_bit)
+        
+        # Set the DataFrame index as its datetime
+        # df = df.set_index('datetime')
+        # df.index = ((df.index) - pd.Timedelta(hours=np.max(np.unique(df.index.hour))))
+        # df = df[df.index.year != 1970]
+        df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
+        # Get observations for specific years, days, filters, etc.
+        if specific_years is not None:
+            df = df[df['night'].dt.year.isin(specific_years)]
+        if specific_months is not None:
+            df = df[df['night'].dt.month.isin(specific_months)]
+        if specific_days is not None:
+            df = df[df['night'].dt.day.isin(specific_days)]
+        if specific_filters is not None:
+            df = df[df['filter'].isin(specific_filters)]
+        # remove observations in 1970 - what are these?
+        df = df[df['night'].dt.year != 1970]
+        self._df = df # save for diagnostics - #TODO remove when all is tested
+        
         # Group observations by observation night
-        groups = df.groupby(df.index.normalize())
+        # groups = df.groupby(df.index.normalize())
+        groups = df.groupby('night')
         self._groups = groups
         self.unique_nights = groups.groups.keys()
         self.n_nights = groups.ngroups
@@ -72,8 +77,9 @@ class OfflineDataset(torch.utils.data.Dataset):
         actions = self._construct_actions(next_states, num_bins_1d)
         rewards = self._construct_rewards(groups)
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
-        self._done_indices = np.where(states[:, 0] == -1)[0][1:] - 1
+        self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
         dones[self._done_indices] = True
+        dones[-1] = True
         action_masks = self._construct_action_masks()
 
         # Save transitions as tensors and instatiate as attributes
@@ -124,6 +130,7 @@ class OfflineDataset(torch.utils.data.Dataset):
         moon_el = np.zeros_like(az, dtype=np.float32)
         airmass = np.zeros_like(az, dtype=np.float32)
         ha = np.zeros_like(az, dtype=np.float32)
+        timestamps = np.zeros_like(az, dtype=np.float32)
         null_obs_indices = []
 
         # Extra info
@@ -146,21 +153,15 @@ class OfflineDataset(torch.utils.data.Dataset):
                 sun_az[idx], sun_el[idx] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
                 moon_az[idx], moon_el[idx] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 
-        self.az = az
-        self.el = el
-        self.sun_az = sun_az
-        self.sun_el = sun_el
-        self.moon_az = moon_az
-        self.moon_el = moon_el
-        self.airmass = airmass
-        self.ha = ha
         self.null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
-        self.null_mask = np.ones_like(self.az, dtype=bool)
+        self.null_mask = np.ones_like(az, dtype=bool)
         self.null_mask[self.null_obs_indices] = False
         all_states = np.vstack((az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha)).T
         self._all_states = all_states
         states = np.delete(all_states, self.null_obs_indices[1:] - 1, axis=0)[:-1]
         next_states = np.delete(all_states, self.null_obs_indices, axis=0)
+        self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha = states.T.copy()
+
         return states, next_states
 
     def _construct_actions(self, next_states, num_bins_1d):
