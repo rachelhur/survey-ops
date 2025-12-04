@@ -1,111 +1,134 @@
 from datetime import datetime
 from survey_ops.utils import units, ephemerides
-import tempfile, os, shutil, glob, imageio
+import tempfile, os, shutil, glob
+import imageio.v2 as imageio
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import Basemap
+import cartopy.crs as ccrs
+
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
 
 
-def initialize_orthographic_plot(time, figsize=(10.5,8.5), dpi=80):
+class SkyMap:
     """
-    Initialize a map in orthographic projection for plotting DECam surveys.
-    Code adapted from kadrlica's obztak/utils/ortho.py
-
-    Arguments
-    ---------
-    time : float [None]
-        Time (Unix timestamp, in UTC) at which to define observer.
-
-    Returns
-    -------
-    fig : matplotlib.figure.Figure
-        The created figure.
-    basemap : mpl_toolkits.basemap.Basemap
-        The created basemap object.
-    observer : ephem.Observer
-        The observer object at the specified time.
+    A class for making sky maps in RA and Dec using Cartopy. Cartopy expects lon and lat
+    coordinates, while RA increases opposite to lon. This class supports orthographic,
+    Mollweide, Hammer, and Aitoff projections, and it can plot scatters and lines.
     """
+    
+    def __init__(
+        self, center_ra=0, center_dec=0, projection="ortho", figsize=(10.5,8.5), dpi=80
+    ):
+        """
+        Initialize the class.
 
-    # create an observer at selected time
-    observer = ephemerides.blanco_observer(time=time)
+        Arguments:
+        center_ra, center_dec : float
+            Center RA, Dec coordinates in radians.
+        projection : str
+            Map projection to use
+        figsize : tuple of floats
+            figsize to pass to matplotlib
+        dpi : int
+            dpi to pass to matplotlib
+        """
 
-    # projection info
-    zenith_lon, zenith_lat = ephemerides.topographic_to_equatorial(
-        0, '90', observer=observer
-    )
-    defaults = dict(
-        projection='ortho',
-        celestial=True,
-        rsphere=1.0,
-        lon_0= -zenith_lon / units.deg,
-        lat_0= zenith_lat / units.deg,
-    )
+        # convert RA center to cartopy longitude
+        self.center_lon = - center_ra / units.deg % 360
+        self.center_lat = center_dec / units.deg
 
-    # initialize the figure with orthographic projection
-    fig = plt.figure(figsize=figsize, dpi=dpi)
-    plt.cla()
-    basemap = Basemap(**defaults)
+        # choose a projection
+        if projection.lower() in ["ortho", "orthographic"]:
+            self.projection = ccrs.Orthographic(
+                central_longitude=self.center_lon,
+                central_latitude=self.center_lat
+            )
+        elif projection.lower() in ["moll", "mollweide"]:
+            self.projection = ccrs.Mollweide(central_longitude=self.center_lon)
+        elif projection.lower() in ["hammer"]:
+            self.projection = ccrs.Hammer(central_longitude=self.center_lon)
+        elif projection.lower() in ["aitoff"]:
+            self.projection = ccrs.Aitoff(central_longitude=self.center_lon)
+        else:
+            raise ValueError(f"Unknown projection: {projection}")
 
-    # set title to chosen time
-    plt.title(datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
+        # set up figure and axes
+        self.fig = plt.figure(figsize=figsize, dpi=dpi)
+        self.ax = self.fig.add_subplot(1, 1, 1, projection=self.projection)
+        self.ax.set_global()
 
-    return fig, basemap, observer
+        # CRS for RA/Dec inputs
+        self.input_crs = ccrs.PlateCarree()
 
-def plot_field(ra, dec, basemap, observer, status):
-    """
-    Plot a specific field on an existing orthographic basemap.
+        # initialize plot gridlines
+        self.ax.gridlines(color='gray', linestyle='dotted', linewidth=0.8)
 
-    Arguments
-    ---------
-    ra, dec : float
-        Right ascension and declination in radians of the field to plot.
-    basemap : mpl_toolkits.basemap.Basemap
-        The basemap object.
-    observer : ephem.Observer
-        The observer object.
-    status : str
-        Whether the field is "current", "completed", or "future".
 
-    Returns
-    -------
-    basemap : mpl_toolkits.basemap.Basemap
-        The updated basemap object.
-    """
+    # convert RA (in rad) to the longitude convention (in rad) Cartopy expects
+    @staticmethod
+    def ra_to_lon(ra_deg):
+        return (-np.asarray(ra_deg)) % (360 * units.deg)
 
-    # determine if field is completed
-    if status not in ["current", "completed", "future"]:
-        raise ValueError("Invalid field status: " + status)
-    if status == "completed":
-        c = '0.8'
-        edgecolor = None
-        zorder = 9
-    elif status == "current":
-        c = '0.6'
-        edgecolor = "k"
-        zorder = 10
-    else:  # future
-        c = '1.0'
-        edgecolor = "gainsboro"
-        zorder = 8
 
-    # pixel location of the field
-    x, y = basemap(ra / units.deg, dec / units.deg)
+    # public plotting API ---------------------------------
 
-    # plot the field
-    basemap.scatter(
-        x=x,
-        y=y,
-        c=c,
-        edgecolor=edgecolor,
-        marker='H',
-        s=80,
-        zorder=zorder,
-    )
+    def scatter(self, ra, dec, **kwargs):
+        """
+        Plots points on map as a scatter plot.
 
-    return basemap
+        Arguments:
+        ra, dec : array of floats
+            RA and Dec coordinates to plot
+        kwargs :
+            Options to pass to ax.scatter
+        """
+        lon = self.ra_to_lon(ra)
+        lat = np.asarray(dec)
+        self.ax.scatter(
+            lon / units.deg, lat / units.deg, transform=self.input_crs, **kwargs
+        )
+
+
+    def plot(self, ra, dec, **kwargs):
+        """
+        Plots points on map as a line plot.
+
+        Arguments:
+        ra, dec : array of floats
+            RA and Dec coordinates to plot
+        kwargs :
+            Options to pass to ax.plot
+        """
+        lon = self.ra_to_lon(ra)
+        lat = np.asarray(dec)
+        self.ax.plot(
+            lon / units.deg, lat / units.deg, transform=self.input_crs, **kwargs
+        )
+
+
+    def text(self, ra, dec, label, **kwargs):
+        """
+        Adds text to the map.
+
+        Arguments:
+        ra, dec : array of floats
+            RA and Dec coordinates to add text
+        label : str
+            test to add
+        kwargs :
+            Options to pass to ax.text
+        """
+        lon = self.ra_to_lon(ra)
+        lat = np.asarray(dec)
+        self.ax.text(
+            lon / units.deg, lat / units.deg, label, transform=self.input_crs, **kwargs
+        )
+
 
 def plot_fields(time, current_radec, completed_radec, future_radec):
     """
-    Creates a plot of current and completed fields.
+    Initialize a sky view and plot of current and completed fields at a selected time.
 
     Arguments
     ---------
@@ -120,40 +143,56 @@ def plot_fields(time, current_radec, completed_radec, future_radec):
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
+    skymap : SkyMap instance
         The created figure.
-    basemap : mpl_toolkits.basemap.Basemap
-        The basemap object.
     """
-    # initialize figure
-    fig, basemap, observer = initialize_orthographic_plot(time=time)
 
-    # plot all fields
-    basemap = plot_field(
+    # initialize figure at selected time
+    observer = ephemerides.blanco_observer(time=time)
+    zenith_ra, zenith_dec = ephemerides.topographic_to_equatorial(
+        0, '90', observer=observer
+    )
+    skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
+
+    # set title to selected time
+    plt.title(datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
+
+    # plot current field
+    skymap.scatter(
         ra=current_radec[0],
         dec=current_radec[1],
-        basemap=basemap,
-        observer=observer,
-        status="current",
+        c='0.6',
+        edgecolor='k',
+        zorder=10,
+        marker='H',
+        s=80,
     )
-    for ra, dec in completed_radec:
-        basemap = plot_field(
-            ra=ra,
-            dec=dec,
-            basemap=basemap,
-            observer=observer,
-            status="completed",
-        )
-    for ra, dec in future_radec:
-        basemap = plot_field(
-            ra=ra,
-            dec=dec,
-            basemap=basemap,
-            observer=observer,
-            status="future",
+
+    # plot completed fields
+    if len(completed_radec) > 0:
+        skymap.scatter(
+            ra=np.asarray(completed_radec)[:,0],
+            dec=np.asarray(completed_radec)[:,1],
+            c='0.8',
+            edgecolor=None,
+            zorder=9,
+            marker='H',
+            s=80,
         )
 
-    return fig, basemap
+    # plot future fields
+    if len(future_radec) > 1:
+        skymap.scatter(
+            ra=np.asarray(future_radec)[:,0],
+            dec=np.asarray(future_radec)[:,1],
+            c='1.0',
+            edgecolor='gainsboro',
+            zorder=8,
+            marker='H',
+            s=80,
+        )
+
+    return skymap
 
 def plot_fields_movie(outfile, times, ras, decs):
     """
@@ -181,14 +220,14 @@ def plot_fields_movie(outfile, times, ras, decs):
     # plot each observation successively, saving pngs
     plt.ioff()
     for i, (time, ra, dec) in enumerate(zip(times, ras, decs)):
-        fig, basemap = plot_fields(
+        skymap = plot_fields(
             time,
             current_radec=(ra, dec),
             completed_radec=list(zip(ras[:i], decs[:i])),
             future_radec=list(zip(ras[i+1:], decs[i+1:]))
         )
         plt.savefig(os.path.join(tmpdir, 'field_%08i.png' % i))
-        plt.close(fig)
+        plt.close(skymap.fig)
     plt.ion()
 
     # convert pngs to gif
@@ -197,7 +236,7 @@ def plot_fields_movie(outfile, times, ras, decs):
         shutil.rmtree(tmpdir)
         raise RuntimeError("No PNG frames were generated for plot_fields_movie()")
     images = [imageio.imread(p) for p in pngs]
-    imageio.mimsave(outfile, images, duration=0.10)
+    imageio.mimsave(outfile, images, duration=0.10, loop=0)
     shutil.rmtree(tmpdir)
 
     return
