@@ -60,7 +60,6 @@ class OfflineDataset(torch.utils.data.Dataset):
         self._df = df # save for diagnostics - #TODO remove when all is tested
         
         # Group observations by observation night
-        # groups = df.groupby(df.index.normalize())
         groups = df.groupby('night')
         self._groups = groups
         self.unique_nights = groups.groups.keys()
@@ -121,6 +120,11 @@ class OfflineDataset(torch.utils.data.Dataset):
         return transition
 
     def _construct_states(self, groups):
+        """
+        Constructs state and next_states for all transitions.
+        Inserts a "null" observation before the first observation each night.
+        The null observation state is defined as being an array of zeros
+        """
         # State vars
         az = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
         el = np.zeros_like(az, dtype=np.float32)
@@ -130,7 +134,7 @@ class OfflineDataset(torch.utils.data.Dataset):
         moon_el = np.zeros_like(az, dtype=np.float32)
         airmass = np.zeros_like(az, dtype=np.float32)
         ha = np.zeros_like(az, dtype=np.float32)
-        timestamps = np.zeros_like(az, dtype=np.float32)
+        timestamp = np.zeros_like(az, dtype=np.int32)
         null_obs_indices = []
 
         # Extra info
@@ -140,29 +144,32 @@ class OfflineDataset(torch.utils.data.Dataset):
         for i, ((day, subdf), (_, idxs)) in enumerate(zip(groups, groups.indices.items())):
             indices = idxs + i + 1
             null_obs_indices.append(idxs[0] + i)
-            timestamps = subdf['timestamp']
+            timestamp[indices] = subdf['timestamp']
             az[indices] = subdf['az'].values
             el[indices] = 90.0 - subdf['zd'].values
             airmass[indices] = subdf['airmass'].values
             ha[indices] = subdf['ha'].values
             
-            # Get sun and moon az&el
-            for idx, time in zip(indices, timestamps):
+            
+            # Get sun and moon az,el
+            for idx, time in zip(indices, timestamp):
                 sun_ra, sun_dec = get_source_ra_dec('sun', time=time)
                 moon_ra, moon_dec = get_source_ra_dec('moon', time=time)
                 sun_az[idx], sun_el[idx] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
                 moon_az[idx], moon_el[idx] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 
-        self.null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
+        null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
         self.null_mask = np.ones_like(az, dtype=bool)
-        self.null_mask[self.null_obs_indices] = False
-        all_states = np.vstack((az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha)).T
+        self.null_mask[null_obs_indices] = False
+        all_states = np.vstack((az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha, timestamp)).T
         self._all_states = all_states
-        states = np.delete(all_states, self.null_obs_indices[1:] - 1, axis=0)[:-1]
-        next_states = np.delete(all_states, self.null_obs_indices, axis=0)
-        self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha = states.T.copy()
+        states = np.delete(all_states, null_obs_indices[1:] - 1, axis=0)[:-1]
+        next_states = np.delete(all_states, null_obs_indices, axis=0)
+        self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha, self.timestamps = next_states.T.copy()
 
         return states, next_states
+    
+    # def id2azel()
 
     def _construct_actions(self, next_states, num_bins_1d):
         az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)

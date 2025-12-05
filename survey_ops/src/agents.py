@@ -89,6 +89,7 @@ class Agent:
         }
 
         if dataloader is not None:
+            # TODO for v0 only - remove when model is updated for release
             dataset_size = len(dataloader.dataset)
             total_steps = int(num_epochs * dataset_size)
             loader_iter = iter(dataloader)  # create iterator

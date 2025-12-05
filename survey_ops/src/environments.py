@@ -2,6 +2,10 @@ from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
 
+import sys
+sys.path.append('../utils')
+from ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
+
 
 from typing import Optional
 import numpy as np
@@ -235,3 +239,130 @@ class TelescopeEnv_v0(BaseTelescope):
         terminated = self._obs_idx + 1 >= self._n_obs_per_night
         return terminated
 
+class OfflineEnv(BaseTelescope):
+    """
+    A concrete Gymnasium environment implementation compatible with OfflineDataset.
+    """
+    def __init__(self, dataset):
+        """
+        Args
+        ----
+            dataset: An object (assumed to be TelescopeDatasetv0) containing
+                     static environment parameters and observation data.
+        """
+        # instantiate static attributes
+        self.dataset = dataset
+        self.unique_radec, field_counts = np.unique([(ra, dec) for ra, dec in zip(dataset._df['ra'].values, dataset._df['dec'].values)], axis=0, return_counts=True)
+        self.field2radec = {i: (ra, dec) for i, (ra, dec) in enumerate(self.unique_radec)}
+        self.timestamps = self.dataset.timestamps
+        self.obs_dim = dataset.obs_dim
+        self.dones = dataset.dones
+        self.reward_func = dataset.reward_func
+        self.normalize_obs = dataset.normalize_obs
+        self.norm = np.ones(shape=self.obs_dim)
+        if self.normalize_obs:
+            self.means = dataset.means
+            self.stds = dataset.stds
+        self.observation_space = gym.spaces.Box(
+            low=-10, #np.min(dataset.obs),
+            high=1e5,
+            shape=(self.obs_dim,),
+            dtype=np.float32,
+        )
+        # Define action space        
+        self.action_space = gym.spaces.Discrete(self.num_actions)
+        super().__init__()
+    
+    # ------------------------------------------------------------ #
+    # -------------Convenience functions-------------------------- #
+    # ------------------------------------------------------------ #
+
+    def _init_to_first_state(self):
+        """
+        Initializes the internal state variables for the start of a new episode.
+
+        The episode starts at the beginning of the observation window (index 0)
+        and with the telescope pointing at the first target field.
+        """
+        first_state = np.zeros(self.obs_dim, dtype=np.float32)
+        
+        self._field_id = self.target_field_ids[0]
+        self._action_mask = np.ones(self.nfields, dtype=bool)
+        self._visited = [self.target_field_ids[0]]
+        self._update_action_mask(int(self.target_field_ids[0]))
+
+    def _update_action_mask(self, action):
+        """
+        Updates the boolean mask that tracks valid actions (field IDs).
+
+        An action becomes invalid if the target field has already been visited
+        the maximum allowed number of times (`self.max_visits`).
+
+        Args:
+            action (int): The field ID to check and potentially mask.
+        """
+        if self._visited.count(action) == self.max_visits:
+            self._action_mask[action] = False
+
+    def _update_obs(self, action):
+        """
+        Updates the internal state variables based on the action taken.
+
+        Args
+        ----
+            action (int): The chosen field ID to observe next.
+        """
+        self._bin_id = action
+        # self._coord = np.array(self.id2pos[action], dtype=np.float32)
+        self._visited.append(action)
+        self._update_action_mask(action)
+
+    def _get_obs(self):
+        """Converts the current internal state into the formal observation format.
+
+        The observation is a vector containing the current field ID and the
+        current observation index (time step).
+
+        Returns
+        -------
+            np.ndarray: The observation vector, potentially normalized.
+        """
+
+        obs = np.array([
+            self._az, 
+            self._el,
+            self._sun_az,
+            self._sun_el,
+            self._moon_az,
+            self._moon_el,
+            self._airmass,
+            self._ha,
+            self._timestamp
+            ], 
+            dtype=np.float32)
+        # obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
+        return obs
+
+    def _get_info(self):
+        """
+        Compute auxiliary information for debugging and constrained action spaces.
+
+        Returns
+        -------
+            dict: A dictionary containing the current action mask.
+        """
+        return {'action_mask': self._action_mask.copy()}
+    
+    def _get_termination_status(self):
+        """
+        Checks if the episode has reached its termination condition.
+
+        Termination occurs when the total number of observations for the night
+        (based on the dataset) has been met or exceeded.
+
+        Returns
+        -------
+            bool: True if the episode is terminated, False otherwise.
+        """
+        terminated = self._obs_idx + 1 >= self.num_transitions
+        return terminated
