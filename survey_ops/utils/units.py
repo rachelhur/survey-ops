@@ -1,13 +1,13 @@
 import numpy as np
 
 
-#=======================================================================================
+# ======================================================================================
 # unit conversion constants
 # intended use:
 # - survey_ops assumes native units throughout code (for instance, all angles are rad)
 # - multiply by units to convert to the native units (ex: my_ang = 30 * units.deg)
 # - divide by units to convert from native unit (ex: my ang_in_deg = my_ang / units.deg)
-#=======================================================================================
+# ======================================================================================
 
 # angle units
 rad = 1.0
@@ -23,10 +23,11 @@ day = 24.0 * hr
 yr = 365.25 * day
 
 
-#=======================================================================================
+# ======================================================================================
 # conversion functions
 # intended use: for particularly annoying conversions not handled by a simple constant
-#=======================================================================================
+# ======================================================================================
+
 
 def rad_to_hms(ang):
     """
@@ -48,6 +49,7 @@ def rad_to_hms(ang):
     minutes = (hours - int(hours)) * 60.0
     seconds = (minutes - int(minutes)) * 60.0
     return int(hours), int(minutes), seconds
+
 
 def rad_to_dms(ang):
     """
@@ -75,6 +77,7 @@ def rad_to_dms(ang):
     arcseconds = (arcminutes - int(arcminutes)) * 60.0
     return sign * int(degrees), int(arcminutes), arcseconds
 
+
 def hms_to_rad(hours, minutes, seconds):
     """
     Convert hours, minutes, seconds to angle in radians.
@@ -96,6 +99,7 @@ def hms_to_rad(hours, minutes, seconds):
 
     ang = (hours + minutes / 60.0 + seconds / 3600.0) * (15.0 * deg)
     return ang
+
 
 def dms_to_rad(degrees, arcminutes, arcseconds):
     """
