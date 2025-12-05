@@ -142,6 +142,10 @@ def healpix_azel_grid(nside, hemisphere=True):
     az, el : arrays of floats
         The center coordinates of the pixels
     """
+    import healpy as hp
+    import numpy as np
+    from survey_ops.utils import units
+
     npix = hp.nside2npix(nside)
 
     # get pixel centers in spherical coords (in deg)
