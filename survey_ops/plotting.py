@@ -16,9 +16,9 @@ class SkyMap:
     coordinates, while RA increases opposite to lon. This class supports orthographic,
     Mollweide, Hammer, and Aitoff projections, and it can plot scatters and lines.
     """
-    
+
     def __init__(
-        self, center_ra=0, center_dec=0, projection="ortho", figsize=(10.5,8.5), dpi=80
+        self, center_ra=0, center_dec=0, projection="ortho", figsize=(10.5, 8.5), dpi=80
     ):
         """
         Initialize the class.
@@ -35,14 +35,13 @@ class SkyMap:
         """
 
         # convert RA center to cartopy longitude
-        self.center_lon = - center_ra / units.deg % 360
+        self.center_lon = -center_ra / units.deg % 360
         self.center_lat = center_dec / units.deg
 
         # choose a projection
         if projection.lower() in ["ortho", "orthographic"]:
             self.projection = ccrs.Orthographic(
-                central_longitude=self.center_lon,
-                central_latitude=self.center_lat
+                central_longitude=self.center_lon, central_latitude=self.center_lat
             )
         elif projection.lower() in ["moll", "mollweide"]:
             self.projection = ccrs.Mollweide(central_longitude=self.center_lon)
@@ -62,14 +61,12 @@ class SkyMap:
         self.input_crs = ccrs.PlateCarree()
 
         # initialize plot gridlines
-        self.ax.gridlines(color='gray', linestyle='dotted', linewidth=0.8)
-
+        self.ax.gridlines(color="gray", linestyle="dotted", linewidth=0.8)
 
     # convert RA (in rad) to the longitude convention (in rad) Cartopy expects
     @staticmethod
     def ra_to_lon(ra_deg):
         return (-np.asarray(ra_deg)) % (360 * units.deg)
-
 
     # public plotting API ---------------------------------
 
@@ -89,7 +86,6 @@ class SkyMap:
             lon / units.deg, lat / units.deg, transform=self.input_crs, **kwargs
         )
 
-
     def plot(self, ra, dec, **kwargs):
         """
         Plots points on map as a line plot.
@@ -105,7 +101,6 @@ class SkyMap:
         self.ax.plot(
             lon / units.deg, lat / units.deg, transform=self.input_crs, **kwargs
         )
-
 
     def text(self, ra, dec, label, **kwargs):
         """
@@ -150,7 +145,7 @@ def plot_fields(time, current_radec, completed_radec, future_radec):
     # initialize figure at selected time
     observer = ephemerides.blanco_observer(time=time)
     zenith_ra, zenith_dec = ephemerides.topographic_to_equatorial(
-        0, '90', observer=observer
+        0, "90", observer=observer
     )
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
@@ -161,38 +156,39 @@ def plot_fields(time, current_radec, completed_radec, future_radec):
     skymap.scatter(
         ra=current_radec[0],
         dec=current_radec[1],
-        c='0.6',
-        edgecolor='k',
+        c="0.6",
+        edgecolor="k",
         zorder=10,
-        marker='H',
+        marker="H",
         s=80,
     )
 
     # plot completed fields
     if len(completed_radec) > 0:
         skymap.scatter(
-            ra=np.asarray(completed_radec)[:,0],
-            dec=np.asarray(completed_radec)[:,1],
-            c='0.8',
+            ra=np.asarray(completed_radec)[:, 0],
+            dec=np.asarray(completed_radec)[:, 1],
+            c="0.8",
             edgecolor=None,
             zorder=9,
-            marker='H',
+            marker="H",
             s=80,
         )
 
     # plot future fields
     if len(future_radec) > 1:
         skymap.scatter(
-            ra=np.asarray(future_radec)[:,0],
-            dec=np.asarray(future_radec)[:,1],
-            c='1.0',
-            edgecolor='gainsboro',
+            ra=np.asarray(future_radec)[:, 0],
+            dec=np.asarray(future_radec)[:, 1],
+            c="1.0",
+            edgecolor="gainsboro",
             zorder=8,
-            marker='H',
+            marker="H",
             s=80,
         )
 
     return skymap
+
 
 def plot_fields_movie(outfile, times, ras, decs):
     """
@@ -211,7 +207,7 @@ def plot_fields_movie(outfile, times, ras, decs):
     """
 
     # ensure output file is gif
-    if os.path.splitext(outfile)[-1] not in ['.gif']:
+    if os.path.splitext(outfile)[-1] not in [".gif"]:
         raise NotImplementedError("Only animated gif currently supported.")
 
     # create temporary directory for temporary png files
@@ -224,14 +220,14 @@ def plot_fields_movie(outfile, times, ras, decs):
             time,
             current_radec=(ra, dec),
             completed_radec=list(zip(ras[:i], decs[:i])),
-            future_radec=list(zip(ras[i+1:], decs[i+1:]))
+            future_radec=list(zip(ras[i + 1 :], decs[i + 1 :])),
         )
-        plt.savefig(os.path.join(tmpdir, 'field_%08i.png' % i))
+        plt.savefig(os.path.join(tmpdir, "field_%08i.png" % i))
         plt.close(skymap.fig)
     plt.ion()
 
     # convert pngs to gif
-    pngs = sorted(glob.glob(os.path.join(tmpdir, '*.png')))
+    pngs = sorted(glob.glob(os.path.join(tmpdir, "*.png")))
     if not pngs:
         shutil.rmtree(tmpdir)
         raise RuntimeError("No PNG frames were generated for plot_fields_movie()")
@@ -240,6 +236,7 @@ def plot_fields_movie(outfile, times, ras, decs):
     shutil.rmtree(tmpdir)
 
     return
+
 
 if __name__ == "__main__":
     import json
@@ -266,7 +263,7 @@ if __name__ == "__main__":
         "-s",
         "--schedule_file",
         type=str,
-        help='Path to the schedule file, a csv with keys "time" and "field_id".'
+        help='Path to the schedule file, a csv with keys "time" and "field_id".',
     )
     args = parser.parse_args()
 
@@ -280,7 +277,7 @@ if __name__ == "__main__":
     # call plotting function
     plot_fields_movie(
         outfile=args.outfile,
-        times=schedule['time'].values,
-        ras=[id2pos[str(fid)][0] * units.deg for fid in schedule['field_id'].values],
-        decs=[id2pos[str(fid)][1] * units.deg for fid in schedule['field_id'].values],
+        times=schedule["time"].values,
+        ras=[id2pos[str(fid)][0] * units.deg for fid in schedule["field_id"].values],
+        decs=[id2pos[str(fid)][1] * units.deg for fid in schedule["field_id"].values],
     )

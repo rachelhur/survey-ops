@@ -1,6 +1,7 @@
 import ephem
 from datetime import datetime
 
+
 def blanco_observer(time=None):
     """
     Define an ephem.Observer for the Blanco telescope location. Location info from:
@@ -19,8 +20,8 @@ def blanco_observer(time=None):
 
     # define the location
     observer = ephem.Observer()
-    observer.lat = "-30:10:10.78" # -30.169661 deg
-    observer.lon = "-70:48:23.49" # -70.806525 deg
+    observer.lat = "-30:10:10.78"  # -30.169661 deg
+    observer.lon = "-70:48:23.49"  # -70.806525 deg
     observer.elevation = 2206.8  # m
 
     # initialize time
@@ -30,6 +31,7 @@ def blanco_observer(time=None):
         observer.date = datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S")
 
     return observer
+
 
 def get_source_ra_dec(source, time=None, observer=None):
     """
@@ -66,6 +68,7 @@ def get_source_ra_dec(source, time=None, observer=None):
     body.compute(observer)
     return body.ra, body.dec
 
+
 def equatorial_to_topographic(ra, dec, time=None, observer=None):
     """
     Convert RA/Dec to Az/El for the Blanco telescope location.
@@ -99,6 +102,7 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
     source.compute(observer)
     return source.az, source.alt
 
+
 def topographic_to_equatorial(az, el, time=None, observer=None):
     """
     Convert Az/El to RA/Dec for the Blanco telescope location.
@@ -126,6 +130,7 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
     # compute topographic position for the observer
     return observer.radec_of(az, el)
 
+
 def healpix_azel_grid(nside, hemisphere=True):
     """
     Create a grid over az and el using healpix.
@@ -137,7 +142,7 @@ def healpix_azel_grid(nside, hemisphere=True):
     hemisphere : bool [True]
         Optionally keep only pixels whose centers are above the horizon.
 
-    Returns 
+    Returns
     -------
     az, el : arrays of floats
         The center coordinates of the pixels
