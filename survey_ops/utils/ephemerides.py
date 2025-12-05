@@ -161,8 +161,9 @@ def healpix_azel_grid(nside, hemisphere=True):
     el *= units.deg
 
     # keep only bins above the horizon
-    keep = el > 0
-    az = az[keep]
-    el = el[keep]
+    if hemisphere:
+        keep = el > 0
+        az = az[keep]
+        el = el[keep]
 
     return az, el
