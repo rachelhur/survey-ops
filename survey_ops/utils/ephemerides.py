@@ -41,7 +41,7 @@ def get_source_ra_dec(source, time=None, observer=None):
     ---------
     src : str
         Source name. Options: "moon", "sun"
-    at_time : float [None]
+    time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
     observer : ephem.Observer [None]
         Observer object. If not provided, defaults to Blanco observer at chosen time.
@@ -131,39 +131,171 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
     return observer.radec_of(az, el)
 
 
-def healpix_azel_grid(nside, hemisphere=True):
+class HealpixGrid:
     """
-    Create a grid over az and el using healpix.
-
-    Arguments
-    ---------
-    nside : int
-        The healpix resolution parameter. npix = 12 * nside^2
-    hemisphere : bool [True]
-        Optionally keep only pixels whose centers are above the horizon.
-
-    Returns
-    -------
-    az, el : arrays of floats
-        The center coordinates of the pixels
+    A class for creating a grid over lon/lat (equiv az/el, ra/dec) using healpix.
     """
-    import healpy as hp
-    import numpy as np
-    from survey_ops.utils import units
 
-    npix = hp.nside2npix(nside)
+    def __init__(self, nside, hemisphere=True):
+        """
+        Initialize the grid.
 
-    # get pixel centers in spherical coords (in deg)
-    az, el = hp.pix2ang(nside, np.arange(npix), lonlat=True)
+        Arguments
+        ---------
+        nside : int
+            The healpix resolution parameter. npix = 12 * nside^2
+        hemisphere : bool [True]
+            Optionally keep only pixels whose centers are above lat>0.
+        """
+        import healpy as hp
+        import numpy as np
+        from survey_ops.utils import units
 
-    # apply units
-    az *= units.deg
-    el *= units.deg
+        # store initial arguments
+        self.nside = nside
+        self.hemisphere = hemisphere
 
-    # keep only bins above the horizon
-    if hemisphere:
-        keep = el > 0
-        az = az[keep]
-        el = el[keep]
+        # track native healpix indices, which may change when pixels are sorted/filtered
+        self.npix = hp.nside2npix(self.nside)
+        self.heal_idx = np.arange(self.npix)
+        self.idx_lookup = {heal_i: i for i, heal_i in enumerate(self.heal_idx)}
 
-    return az, el
+        # get pixel centers in spherical coords (supplied in deg)
+        self.lon, self.lat = hp.pix2ang(self.nside, self.heal_idx, lonlat=True)
+        self.lon *= units.deg
+        self.lat *= units.deg
+
+        # keep only bins above the horizon
+        if hemisphere:
+            keep = self.lat > 0
+            self.lon = self.lon[keep]
+            self.lat = self.lat[keep]
+            self.heal_idx = self.heal_idx[keep]
+            self.idx_lookup = {heal_i: i for i, heal_i in enumerate(self.heal_idx)}
+
+    def ang2idx(self, lon, lat):
+        """
+        Wrapper for healpy.pixelfunc.ang2pix that returns the pixel index corresponding
+        to the given lon/lat position according to pix order in current class instance.
+
+        Arguments
+        ---------
+        lon, lat : float, scalars or array-like
+            Angular coordinates of a point on the sphere
+
+        Returns
+        -------
+        idx : int or array of int
+            Index of currently stored lon/lat pixels corresponding the given positions.
+            Returns None for coords outside the grid
+        """
+
+        # get healpix indices for requested positions
+        heal_idx = hp.ang2pix(
+            nside=self.nside,
+            theta=np.asarray(lon) / units.deg,
+            phi=np.asarray(lat) / units.deg,
+            lonlat=True,
+            latauto=True,
+            latbounce=False,
+        )
+
+        # map healpix indices onto the indices for the current grid order
+        if np.iterable(heal_idx):
+            return np.array([self.idx_lookup.get(i, None) for i in heal_idx])
+        else:
+            return self.idx_lookup.get(heal_idx, None)
+
+    def get_angular_separations(self, lon, lat):
+        """
+        For each pixel stored in the grid, calculate the distance from the pixel's
+        center to the provided position.
+
+        Arguments
+        ---------
+        lon, lat : float
+            Position from which to calculate angular separation for each pixel
+
+        Returns
+        -------
+        ang_seps : array of floats
+            Angular separations between pixel centers and the requested lon/lat position
+        """
+        from survey_ops.utils.geometry import angular_separation
+
+        return angular_separation((lon, lat), (self.lon, self.lat))
+
+    def get_source_idx(self, source, time=None, is_azel=None, observer=None):
+        """
+        Determine the pixel of a source's location (sun, moon, etc.) at a specified time
+
+        Arguments
+        ---------
+        src : str
+            Source name. Options: "moon", "sun"
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+        is_azel : bool [True]
+            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
+            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
+            often used for making an az/el grid; specifying overrides this assumption.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, defaults to Blanco observer at chosen time
+
+        Returns
+        -------
+        idx : int
+            Index of pixel the source is in. Returns None for pos outside the grid
+        """
+
+        # determine if grid is az/el or ra/dec
+        is_azel = self.hemisphere if is_azel is None else is_azel
+
+        # get the source position
+        lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
+        if is_azel:
+            lon, lat = equatorial_to_topographic(
+                ra=lon, dec=lat, time=time, observer=observer
+            )
+
+        # get sky bin index
+        return self.ang2idx(lon=lon, lat=lat)
+
+    def get_source_angular_separations(
+        self, source, time=None, is_azel=None, observer=None
+    ):
+        """
+        For each pixel stored in the grid, calculate the distance from the pixel's
+        center to a source's location (sun, moon, etc.) at a specified time
+
+        Arguments
+        ---------
+        src : str
+            Source name. Options: "moon", "sun"
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+        is_azel : bool [None]
+            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
+            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
+            often used for making an az/el grid; specifying overrides this assumption.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, defaults to Blanco observer at chosen time
+
+        Returns
+        -------
+        ang_seps : array of floats
+            Angular separations between pixel centers and the requested lon/lat position
+        """
+
+        # determine if grid is az/el or ra/dec
+        is_azel = self.hemisphere if is_azel is None else is_azel
+
+        # get the source position
+        lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
+        if is_azel:
+            lon, lat = equatorial_to_topographic(
+                ra=lon, dec=lat, time=time, observer=observer
+            )
+
+        # get sky bin distances
+        return self.get_angular_separations(lon=lon, lat=lat)
