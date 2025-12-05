@@ -125,3 +125,35 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
 
     # compute topographic position for the observer
     return observer.radec_of(az, el)
+
+def healpix_azel_grid(nside, hemisphere=True):
+    """
+    Create a grid over az and el using healpix.
+
+    Arguments
+    ---------
+    nside : int
+        The healpix resolution parameter. npix = 12 * nside^2
+    hemisphere : bool [True]
+        Optionally keep only pixels whose centers are above the horizon.
+
+    Returns 
+    -------
+    az, el : arrays of floats
+        The center coordinates of the pixels
+    """
+    npix = hp.nside2npix(nside)
+
+    # get pixel centers in spherical coords (in deg)
+    az, el = hp.pix2ang(nside, np.arange(npix), lonlat=True)
+
+    # apply units
+    az *= units.deg
+    el *= units.deg
+
+    # keep only bins above the horizon
+    keep = el > 0
+    az = az[keep]
+    el = el[keep]
+
+    return az, el
