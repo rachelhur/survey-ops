@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.interpolate import RBFInterpolator
 
+
 def interpolate_on_sphere(az, el, az_data, el_data, values, kernel="quintic", **kwargs):
     """
     Function to interpolate between values sampled on a sphere. Uses
@@ -41,4 +42,3 @@ def interpolate_on_sphere(az, el, az_data, el_data, values, kernel="quintic", **
 
     # interpolate on requested values
     return rbf(xyz_pred)
-    
