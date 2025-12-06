@@ -52,7 +52,7 @@ class Agent:
         self.outdir = outdir
         
 
-    def fit(self, num_epochs, dataset=None, batch_size=None, dataloader=None, eval_freq=100):
+    def fit(self, num_epochs, patience=None, dataset=None, batch_size=None, dataloader=None, eval_freq=100):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`

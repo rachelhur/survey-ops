@@ -1,8 +1,9 @@
 
 import numpy as np
 import torch
-from neural_nets import DQN
 import torch.nn.functional as F
+
+from survey_ops.src.neural_nets import DQN
 
 class AlgorithmBase:
     def __init__(self):

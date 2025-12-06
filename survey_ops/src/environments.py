@@ -2,9 +2,7 @@ from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
 
-import sys
-sys.path.append('../utils')
-from ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
+from survey_ops.utils.ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
 
 
 from typing import Optional

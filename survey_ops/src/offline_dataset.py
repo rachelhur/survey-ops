@@ -3,10 +3,7 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler
 from collections import defaultdict
 
-
-import sys
-sys.path.append('../survey_ops/utils')
-from ephemerides import *
+from survey_ops.utils import units, ephemerides
 
 import pandas as pd
 
@@ -16,7 +13,7 @@ def reward_func_v0():
 def standardize(data):
     return (data - data.mean(axis=0)) / data.std(axis=0)
 
-class OfflineDataset(torch.utils.data.Dataset):
+class OfflineDECamDataset(torch.utils.data.Dataset):
     def __init__(self, 
                 df: pd.DataFrame, 
                 num_bins_1d = 10,
@@ -28,6 +25,11 @@ class OfflineDataset(torch.utils.data.Dataset):
                 ):
         self.state_vars = ['az', 'el', 'sun_az', 'sun_el', 'moon_az', 'moon_el', 'airmass', 'ha', 'timestamp'] # time left in night
         self.normalize_state = normalize_state
+
+        # self.fov = 2.2 # degrees
+
+        # self.arcsec_per_pix = .26 # https://noirlab.edu/science/programs/ctio/instruments/Dark-Energy-Camera/characteristics
+        # self.dither_offset = 100 #arcsec
 
         # Add timestamps column to df and sort df by timestamp (increasing)
         utc = pd.to_datetime(df['datetime'], utc=True)
@@ -168,8 +170,6 @@ class OfflineDataset(torch.utils.data.Dataset):
         self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha, self.timestamps = next_states.T.copy()
 
         return states, next_states
-    
-    # def id2azel()
 
     def _construct_actions(self, next_states, num_bins_1d):
         az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
@@ -193,6 +193,23 @@ class OfflineDataset(torch.utils.data.Dataset):
             id2radec[bin_id].append((ra, dec))
         self.id2radec = dict(sorted(id2radec.items()))
         return bin_ids
+    
+    def _get_unique_fields_dict(self, radec_width=.05):
+        """Constructs uniform binning across RA/Dec, then decides that all observations within this width are observing the same field.
+
+        Args
+        ----
+        radec_width (float): the bin width in degrees
+        """
+        radec_width = .05
+        ra_edges = np.arange(np.min(self._df['ra'].values), np.max(self._df['ra'].values), step=radec_width, dtype=np.float32)
+        dec_edges = np.arange(np.min(self._df['dec'].values), np.max(self._df['dec'].values), step=radec_width, dtype=np.float32)
+        num_bins
+
+        i_x = np.digitize(self._df['ra'].values, ra_edges).astype(np.int32) - 1
+        i_y = np.digitize(self._df['dec'].values, dec_edges).astype(np.int32) - 1
+        bin_ids = i_x + i_y * (num_bins_1d)
+
 
     def _construct_rewards(self, groups):
         rewards = np.ones(self.num_transitions)
@@ -217,37 +234,6 @@ class OfflineDataset(torch.utils.data.Dataset):
             pin_memory=pin_memory
         )
         return loader
-
-class TelescopeDatasetv1:
-    """
-    Upgrade of v0. Constructs a dataset for torch DataLoader
-    """
-    def __init__(self, schedule, id2pos, reward_func=None, normalize_obs=True, device='cpu'):
-        dataset_array = dataset_array
-        dataset_tuple = [tuple(row) for row in dataset_array]
-        raise NotImplementedError
-    
-    def _get_rewards(self):
-        raise NotImplementedError
-    
-    def _get_action_masks(self):
-        raise NotImplementedError
-
-    def __len__(self):
-        raise NotImplementedError
-
-    def get_dataloader(self, batch_size):
-        loader = DataLoader(
-            self.dataset,
-            batch_size,
-            sampler=RandomSampler(
-                dataset,
-                replacement=True,
-                num_samples=10**10,
-            ),
-            drop_last=True,
-        )
-
 
 class TelescopeDatasetv0:
     """
