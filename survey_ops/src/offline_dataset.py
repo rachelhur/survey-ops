@@ -172,11 +172,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         return states, next_states
 
-    def _construct_actions(self, next_states, num_bins_1d):
-        az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
-        # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
-        el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
-        # az_centers = el_edges[:-1] + (el_edges[1] - el_edges[0])/2
+    def _construct_actions(self, next_states, binning_method='healpix', num_bins_1d, nsides=None):
+        if binning_method = 'uniform_grid':
+            az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
+            # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
+            el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
+            # az_centers = el_edges[:-1] + (el_edges[1] - el_edges[0])/2
 
         i_x = np.digitize(next_states[:, 0], az_edges).astype(np.int32) - 1
         i_y = np.digitize(next_states[:, 1], el_edges).astype(np.int32) - 1
