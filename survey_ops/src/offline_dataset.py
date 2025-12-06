@@ -3,7 +3,8 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler
 from collections import defaultdict
 
-from survey_ops.utils import units, ephemerides
+from survey_ops.utils.units import *
+from survey_ops.utils.ephemerides import *
 
 import pandas as pd
 
