@@ -1,5 +1,6 @@
 import ephem
 from datetime import datetime
+import numpy as np
 
 
 def blanco_observer(time=None):
@@ -109,9 +110,9 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
 
     Arguments
     ---------
-    az : float
+    az : floats or arrays of floats
         Azimuth in radians
-    el : float
+    el : float or arrays of floats
         Elevation in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -128,7 +129,40 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
     observer = observer if observer is not None else blanco_observer(time=time)
 
     # compute topographic position for the observer
-    return observer.radec_of(az, el)
+    if np.iterable(az):
+        return np.array([observer.radec_of(a, e) for a, e in zip(az, el)]).T
+    else:
+        return observer.radec_of(az, el)
+
+
+def galactic_to_equatorial(l, b):
+    """
+    Convert galactic longitude l / latitude b to equatorial Ra/Dec.
+
+    Arguments
+    ---------
+    l, b : floats or arrays of floats
+        Galactic longitude and latitude in radians
+
+    Returns
+    -------
+    ra, dec : floats or arrays of floats
+        Right ascension and declination in radians
+    """
+    from astropy.coordinates import SkyCoord
+    from survey_ops.utils import units
+
+    # convert units
+    gal = SkyCoord(
+        l=np.asarray(l) / units.deg,
+        b=np.asarray(b) / units.deg,
+        frame="galactic",
+        unit="deg",
+    )
+    icrs = gal.icrs
+    ra, dec = icrs.ra.rad, icrs.dec.rad
+
+    return ra if np.iterable(ra) else ra.item(), dec if np.iterable(dec) else dec.item()
 
 
 class HealpixGrid:

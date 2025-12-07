@@ -8,6 +8,7 @@ import cartopy.crs as ccrs
 import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
+import matplotlib.patheffects as pe
 
 
 class SkyMap:
@@ -23,7 +24,8 @@ class SkyMap:
         """
         Initialize the class.
 
-        Arguments:
+        Arguments
+        ---------
         center_ra, center_dec : float
             Center RA, Dec coordinates in radians.
         projection : str
@@ -63,10 +65,47 @@ class SkyMap:
         # initialize plot gridlines
         self.ax.gridlines(color="gray", linestyle="dotted", linewidth=0.8)
 
+        # add labels to ra gridlines
+        for ra in np.arange(0, 360, 60) * units.deg:
+            self.text(
+                ra=ra,
+                dec=-7 * units.deg,
+                label=f"{ra / units.deg:.0f}°",
+                outline="white",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="black",
+                rotation=90,
+            )
+
+        # add labels to dec gridlines
+        for dec in np.arange(-80, 80 + 1e-5, 20) * units.deg:
+            for ra in np.array([10, 190]) * units.deg:
+                self.text(
+                    ra=ra,
+                    dec=dec,
+                    label=f"{dec / units.deg:.0f}°",
+                    outline="white",
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    color="black",
+                    rotation=0,
+                )
+
+        # add East and West labels
+        self.ax.annotate(
+            "West", xy=(1.01, 0.5), ha="left", xycoords="axes fraction", rotation=-90
+        )
+        self.ax.annotate(
+            "East", xy=(-0.01, 0.5), ha="right", xycoords="axes fraction", rotation=90
+        )
+
     # convert RA (in rad) to the longitude convention (in rad) Cartopy expects
     @staticmethod
     def ra_to_lon(ra_deg):
-        return (-np.asarray(ra_deg)) % (360 * units.deg)
+        return np.unwrap(-np.atleast_1d(ra_deg))
 
     # public plotting API ---------------------------------
 
@@ -74,10 +113,11 @@ class SkyMap:
         """
         Plots points on map as a scatter plot.
 
-        Arguments:
+        Arguments
+        ---------
         ra, dec : array of floats
             RA and Dec coordinates to plot
-        kwargs :
+        kwargs
             Options to pass to ax.scatter
         """
         lon = self.ra_to_lon(ra)
@@ -90,10 +130,11 @@ class SkyMap:
         """
         Plots points on map as a line plot.
 
-        Arguments:
+        Arguments
+        ---------
         ra, dec : array of floats
             RA and Dec coordinates to plot
-        kwargs :
+        kwargs
             Options to pass to ax.plot
         """
         lon = self.ra_to_lon(ra)
@@ -102,26 +143,43 @@ class SkyMap:
             lon / units.deg, lat / units.deg, transform=self.input_crs, **kwargs
         )
 
-    def text(self, ra, dec, label, **kwargs):
+    def text(self, ra, dec, label, outline=None, **kwargs):
         """
         Adds text to the map.
 
-        Arguments:
+        Arguments
+        ---------
         ra, dec : array of floats
             RA and Dec coordinates to add text
         label : str
             test to add
-        kwargs :
+        outline : str
+            If provided, the color to outline the text in
+        kwargs
             Options to pass to ax.text
         """
+        # draw the text
         lon = self.ra_to_lon(ra)
         lat = np.asarray(dec)
-        self.ax.text(
+        txt = self.ax.text(
             lon / units.deg, lat / units.deg, label, transform=self.input_crs, **kwargs
         )
 
+        # outline the text
+        if outline is not None:
+            txt.set_path_effects([pe.withStroke(linewidth=5, foreground=outline)])
 
-def plot_fields(time, current_radec, completed_radec, future_radec):
+
+def plot_fields(
+    time,
+    current_radec,
+    completed_radec,
+    future_radec,
+    plot_zenith=True,
+    plot_airmass=1.4,
+    plot_galaxy=True,
+    plot_moon=True,
+):
     """
     Initialize a sky view and plot of current and completed fields at a selected time.
 
@@ -135,6 +193,14 @@ def plot_fields(time, current_radec, completed_radec, future_radec):
         List of (ra, dec) tuples in radians for completed fields to plot.
     future_radec : list of float tuples
         List of (ra, dec) tuples in radians for future fields to plot.
+    plot_zenith : bool [True]
+        Whether to plot a circle at zenith
+    plot_airmass : float [1.4]
+        Plots a circle at constant airmass. Pass 0 for no circle
+    plot_galaxy : bool [True]
+        Whether to plot a line through the galactic plane +/-1deg
+    plot_moon : bool [True]
+        Whether to plot a circle at the moon's position
 
     Returns
     -------
@@ -180,11 +246,60 @@ def plot_fields(time, current_radec, completed_radec, future_radec):
         skymap.scatter(
             ra=np.asarray(future_radec)[:, 0],
             dec=np.asarray(future_radec)[:, 1],
-            c="1.0",
+            facecolor="none",
             edgecolor="gainsboro",
             zorder=8,
             marker="H",
             s=80,
+        )
+
+    # plot zenith marking
+    if plot_zenith:
+        skymap.scatter(
+            ra=zenith_ra,
+            dec=zenith_dec,
+            facecolor="none",
+            edgecolor="green",
+            zorder=10,
+            marker="o",
+            s=80,
+        )
+
+    # plot lines through the galactic plane
+    if plot_galaxy:
+        l = np.linspace(0, 360, 100) * units.deg
+        b = np.zeros_like(l)
+        ra, dec = ephemerides.galactic_to_equatorial(l=l, b=b)
+        skymap.plot(ra=ra, dec=dec, color="gray", zorder=10, linewidth=0.8)
+        for offset in [5 * units.deg, -5 * units.deg]:
+            ra, dec = ephemerides.galactic_to_equatorial(l=l, b=b + offset)
+            skymap.plot(
+                ra=ra, dec=dec, color="gray", zorder=10, linestyle="--", linewidth=0.8
+            )
+
+    # plot requested airmass
+    if plot_airmass != 0:
+        az = np.linspace(0, 360, 100) * units.deg
+        el = np.ones_like(az) * 90 * units.deg - np.arccos(1 / plot_airmass)
+        ra, dec = ephemerides.topographic_to_equatorial(az=az, el=el, observer=observer)
+        skymap.plot(
+            ra=ra,
+            dec=dec,
+            color="green",
+            zorder=10,
+            linewidth=0.8,
+        )
+
+    # plot the moon
+    if plot_moon:
+        ra, dec = ephemerides.get_source_ra_dec(source="moon", observer=observer)
+        skymap.scatter(
+            ra=ra,
+            dec=dec,
+            facecolor="darkgrey",
+            edgecolor="black",
+            marker="o",
+            s=300,
         )
 
     return skymap
