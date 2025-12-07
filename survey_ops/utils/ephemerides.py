@@ -1,6 +1,7 @@
 import ephem
 from datetime import datetime
 import numpy as np
+from survey_ops.utils import units
 
 
 def blanco_observer(time=None):
@@ -76,9 +77,9 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
 
     Arguments
     ---------
-    ra : float
+    ra : float or array of floats
         Right ascension in radians
-    dec : float
+    dec : float or array of floats
         Declination in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -94,14 +95,25 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
     # initialize observer location and time
     observer = observer if observer is not None else blanco_observer(time=time)
 
-    # define position in equatorial coordinates
-    source = ephem.FixedBody()
-    source._ra = ra
-    source._dec = dec
+    # ephem is not vectorizable, so compute each conversion separately
+    az, el = [], []
+    for r, d in zip(np.atleast_1d(ra), np.atleast_1d(dec)):
 
-    # compute topographic position for the observer
-    source.compute(observer)
-    return source.az, source.alt
+        # define position in equatorial coordinates
+        source = ephem.FixedBody()
+        source._ra = r
+        source._dec = d
+
+        # compute topographic position for the observer
+        source.compute(observer)
+        az.append(source.az)
+        el.append(source.alt)
+
+    # return outputs
+    if len(az) == 1:
+        return az[0], el[0]
+    else:
+        return np.asarray(az), np.asarray(el)
 
 
 def topographic_to_equatorial(az, el, time=None, observer=None):
@@ -150,7 +162,6 @@ def galactic_to_equatorial(l, b):
         Right ascension and declination in radians
     """
     from astropy.coordinates import SkyCoord
-    from survey_ops.utils import units
 
     # convert units
     gal = SkyCoord(
@@ -333,3 +344,41 @@ class HealpixGrid:
 
         # get sky bin distances
         return self.get_angular_separations(lon=lon, lat=lat)
+
+    def get_airmass(self, time=None, is_azel=None, observer=None):
+        """
+        For each pixel stored in the grid, calculate the airmass.
+
+        Arguments
+        ---------
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+            Ignored if is_azel is True.
+        is_azel : bool [None]
+            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
+            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
+            often used for making an az/el grid; specifying overrides this assumption.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, default to Blanco observer at chosen time.
+            Ignored if is_azel is True.
+
+        Returns
+        -------
+        airmass : array of floats
+            Airmass for each pixel. Pixels at or below the horizon default to np.inf
+        """
+        # get elevation of each pixel
+        is_azel = self.hemisphere if is_azel is None else is_azel
+        if is_azel:
+            el = self.lat
+        else:
+            az, el = equatorial_to_topographic(
+                ra=self.lon, dec=self.lat, time=time, observer=observer
+            )
+
+        # calculate airmass
+        airmass = np.ones_like(el)
+        airmass[el <= 0] = np.inf
+        airmass[el > 0] = 1 / np.cos(90 * units.deg - el[el > 0])
+        
+        return airmass
