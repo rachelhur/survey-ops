@@ -98,7 +98,6 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
     # ephem is not vectorizable, so compute each conversion separately
     az, el = [], []
     for r, d in zip(np.atleast_1d(ra), np.atleast_1d(dec)):
-
         # define position in equatorial coordinates
         source = ephem.FixedBody()
         source._ra = r
@@ -178,10 +177,10 @@ def galactic_to_equatorial(l, b):
 
 class HealpixGrid:
     """
-    A class for creating a grid over lon/lat (equiv az/el, ra/dec) using healpix.
+    A class for creating a grid over az/el or ra/dec using healpix.
     """
 
-    def __init__(self, nside, hemisphere=True):
+    def __init__(self, nside, is_azel=True):
         """
         Initialize the grid.
 
@@ -189,8 +188,9 @@ class HealpixGrid:
         ---------
         nside : int
             The healpix resolution parameter. npix = 12 * nside^2
-        hemisphere : bool [True]
-            Optionally keep only pixels whose centers are above lat>0.
+        is_azel : bool [True]
+            Whether grid points (labeled as lon/lat) represent az/el (True) or ra/dec
+            (False). If True, only pixels in the visible hemisphere (el > 0) are kept.
         """
         import healpy as hp
         import numpy as np
@@ -198,7 +198,7 @@ class HealpixGrid:
 
         # store initial arguments
         self.nside = nside
-        self.hemisphere = hemisphere
+        self.is_azel = is_azel
 
         # track native healpix indices, which may change when pixels are sorted/filtered
         self.npix = hp.nside2npix(self.nside)
@@ -211,7 +211,7 @@ class HealpixGrid:
         self.lat *= units.deg
 
         # keep only bins above the horizon
-        if hemisphere:
+        if self.is_azel:
             keep = self.lat > 0
             self.lon = self.lon[keep]
             self.lat = self.lat[keep]
@@ -226,7 +226,8 @@ class HealpixGrid:
         Arguments
         ---------
         lon, lat : float, scalars or array-like
-            Angular coordinates of a point on the sphere
+            Angular coordinates of a point on the sphere. Provide in the same coordinate
+            system as the native pixel system (i.e. az/el if self.is_azel, else ra/dec)
 
         Returns
         -------
@@ -270,7 +271,7 @@ class HealpixGrid:
 
         return angular_separation((lon, lat), (self.lon, self.lat))
 
-    def get_source_idx(self, source, time=None, is_azel=None, observer=None):
+    def get_source_idx(self, source, time=None, observer=None):
         """
         Determine the pixel of a source's location (sun, moon, etc.) at a specified time
 
@@ -280,10 +281,6 @@ class HealpixGrid:
             Source name. Options: "moon", "sun"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
-        is_azel : bool [True]
-            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
-            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
-            often used for making an az/el grid; specifying overrides this assumption.
         observer : ephem.Observer [None]
             Observer object. If not provided, defaults to Blanco observer at chosen time
 
@@ -293,12 +290,9 @@ class HealpixGrid:
             Index of pixel the source is in. Returns None for pos outside the grid
         """
 
-        # determine if grid is az/el or ra/dec
-        is_azel = self.hemisphere if is_azel is None else is_azel
-
         # get the source position
         lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
-        if is_azel:
+        if self.is_azel:
             lon, lat = equatorial_to_topographic(
                 ra=lon, dec=lat, time=time, observer=observer
             )
@@ -306,9 +300,7 @@ class HealpixGrid:
         # get sky bin index
         return self.ang2idx(lon=lon, lat=lat)
 
-    def get_source_angular_separations(
-        self, source, time=None, is_azel=None, observer=None
-    ):
+    def get_source_angular_separations(self, source, time=None, observer=None):
         """
         For each pixel stored in the grid, calculate the distance from the pixel's
         center to a source's location (sun, moon, etc.) at a specified time
@@ -319,10 +311,6 @@ class HealpixGrid:
             Source name. Options: "moon", "sun"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
-        is_azel : bool [None]
-            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
-            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
-            often used for making an az/el grid; specifying overrides this assumption.
         observer : ephem.Observer [None]
             Observer object. If not provided, defaults to Blanco observer at chosen time
 
@@ -332,12 +320,9 @@ class HealpixGrid:
             Angular separations between pixel centers and the requested lon/lat position
         """
 
-        # determine if grid is az/el or ra/dec
-        is_azel = self.hemisphere if is_azel is None else is_azel
-
         # get the source position
         lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
-        if is_azel:
+        if self.is_azel:
             lon, lat = equatorial_to_topographic(
                 ra=lon, dec=lat, time=time, observer=observer
             )
@@ -345,7 +330,7 @@ class HealpixGrid:
         # get sky bin distances
         return self.get_angular_separations(lon=lon, lat=lat)
 
-    def get_airmass(self, time=None, is_azel=None, observer=None):
+    def get_airmass(self, time=None, observer=None):
         """
         For each pixel stored in the grid, calculate the airmass.
 
@@ -354,10 +339,6 @@ class HealpixGrid:
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
             Ignored if is_azel is True.
-        is_azel : bool [None]
-            Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
-            ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
-            often used for making an az/el grid; specifying overrides this assumption.
         observer : ephem.Observer [None]
             Observer object. If not provided, default to Blanco observer at chosen time.
             Ignored if is_azel is True.
@@ -368,8 +349,7 @@ class HealpixGrid:
             Airmass for each pixel. Pixels at or below the horizon default to np.inf
         """
         # get elevation of each pixel
-        is_azel = self.hemisphere if is_azel is None else is_azel
-        if is_azel:
+        if self.is_azel:
             el = self.lat
         else:
             az, el = equatorial_to_topographic(
@@ -380,5 +360,5 @@ class HealpixGrid:
         airmass = np.ones_like(el)
         airmass[el <= 0] = np.inf
         airmass[el > 0] = 1 / np.cos(90 * units.deg - el[el > 0])
-        
+
         return airmass
