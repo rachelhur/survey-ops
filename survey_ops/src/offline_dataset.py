@@ -5,6 +5,7 @@ from collections import defaultdict
 
 from survey_ops.utils.units import *
 from survey_ops.utils.ephemerides import *
+import healpy as hp
 
 import pandas as pd
 
@@ -22,13 +23,22 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 specific_years: list = None,
                 specific_months: list = None,
                 specific_days: list = None,
-                specific_filters: list = None
+                specific_filters: list = None,
+                binning_method = 'healpix',
+                nside=None
                 ):
-        self.state_vars = ['az', 'el', 'sun_az', 'sun_el', 'moon_az', 'moon_el', 'airmass', 'ha', 'timestamp'] # time left in night
+        self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'azimuth', 3: 'elevation', 4: 'sun_azimuth', 5: 'sun_elevation',
+                              6: 'moon_azimuth', 7: 'moon_elevation', 8: 'airmass', 9: 'hour_angle', 10: 'timestamp'}
+        self.statename2stateidx = {v: k for k, v in self.stateidx2name.items()}
         self.normalize_state = normalize_state
+        assert binning_method in ['uniform_grid', 'healpix']
+        assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None)
+        if binning_method == 'healpix':
+            self.hpGrid = HealpixGrid(nside=nside, hemisphere=False)
+        else:
+            self.hpGrid = None
 
         # self.fov = 2.2 # degrees
-
         # self.arcsec_per_pix = .26 # https://noirlab.edu/science/programs/ctio/instruments/Dark-Energy-Camera/characteristics
         # self.dither_offset = 100 #arcsec
 
@@ -76,7 +86,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         
         # Get transition variables
         states, next_states = self._construct_states(groups)
-        actions = self._construct_actions(next_states, num_bins_1d)
+        actions = self._construct_actions(next_states, num_bins_1d=num_bins_1d, binning_method=binning_method)
         rewards = self._construct_rewards(groups)
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
         self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
@@ -129,16 +139,20 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         The null observation state is defined as being an array of zeros
         """
         # State vars
-        az = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
-        el = np.zeros_like(az, dtype=np.float32)
-        sun_az = np.zeros_like(az, dtype=np.float32)
-        sun_el = np.zeros_like(az, dtype=np.float32)
-        moon_az = np.zeros_like(az, dtype=np.float32)
-        moon_el = np.zeros_like(az, dtype=np.float32)
-        airmass = np.zeros_like(az, dtype=np.float32)
-        ha = np.zeros_like(az, dtype=np.float32)
-        timestamp = np.zeros_like(az, dtype=np.int32)
+        ra = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
+        dec = np.zeros_like(ra, dtype=np.float32)
+        az = np.zeros_like(ra, dtype=np.float32) # need to add plus 1 for the null observation each night
+        el = np.zeros_like(ra, dtype=np.float32)
+        sun_az = np.zeros_like(ra, dtype=np.float32)
+        sun_el = np.zeros_like(ra, dtype=np.float32)
+        moon_az = np.zeros_like(ra, dtype=np.float32)
+        moon_el = np.zeros_like(ra, dtype=np.float32)
+        airmass = np.zeros_like(ra, dtype=np.float32)
+        ha = np.zeros_like(ra, dtype=np.float32)
+        timestamp = np.zeros_like(ra, dtype=np.int32)
         null_obs_indices = []
+
+        # sta
 
         # Extra info
         # ra = -1 * np.ones_like(az, dtype=np.float32)
@@ -148,6 +162,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             indices = idxs + i + 1
             null_obs_indices.append(idxs[0] + i)
             timestamp[indices] = subdf['timestamp']
+            ra[indices] = subdf['ra'].values
+            dec[indices] = subdf['dec'].values
             az[indices] = subdf['az'].values
             el[indices] = 90.0 - subdf['zd'].values
             airmass[indices] = subdf['airmass'].values
@@ -164,37 +180,45 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
         self.null_mask = np.ones_like(az, dtype=bool)
         self.null_mask[null_obs_indices] = False
-        all_states = np.vstack((az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha, timestamp)).T
+        all_states = np.vstack((ra, dec, az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha, timestamp)).T
         self._all_states = all_states
         states = np.delete(all_states, null_obs_indices[1:] - 1, axis=0)[:-1]
         next_states = np.delete(all_states, null_obs_indices, axis=0)
-        self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha, self.timestamps = next_states.T.copy()
 
+        # for diagnostics - delete later
+        self.ra, self.dec, self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha, self.timestamps = next_states.T.copy()
         return states, next_states
 
-    def _construct_actions(self, next_states, binning_method='healpix', num_bins_1d, nsides=None):
-        if binning_method = 'uniform_grid':
+    def _construct_actions(self, next_states, binning_method='uniform_grid', num_bins_1d=None):
+        if binning_method == 'uniform_grid':
             az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
             # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
             el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
             # az_centers = el_edges[:-1] + (el_edges[1] - el_edges[0])/2
 
-        i_x = np.digitize(next_states[:, 0], az_edges).astype(np.int32) - 1
-        i_y = np.digitize(next_states[:, 1], el_edges).astype(np.int32) - 1
-        bin_ids = i_x + i_y * (num_bins_1d)
-        self.az_edges = az_edges
-        self.el_edges = el_edges
-        
-        id2azel = defaultdict(list)
-        for az, el, bin_id in zip(next_states[:, 0], next_states[:, 1], bin_ids):
-            id2azel[bin_id].append((az, el))            
-        self.id2azel = dict(sorted(id2azel.items()))
+            i_x = np.digitize(next_states[:, 0], az_edges).astype(np.int32) - 1
+            i_y = np.digitize(next_states[:, 1], el_edges).astype(np.int32) - 1
+            bin_ids = i_x + i_y * (num_bins_1d)
+            self.az_edges = az_edges
+            self.el_edges = el_edges
+            
+            id2azel = defaultdict(list)
+            for az, el, bin_id in zip(next_states[:, 0], next_states[:, 1], bin_ids):
+                id2azel[bin_id].append((az, el))            
+            self.id2azel = dict(sorted(id2azel.items()))
 
-        id2radec = defaultdict(list)
-        for ra, dec, bin_id in zip(self._df['ra'].values, self._df['dec'].values, bin_ids):
-            id2radec[bin_id].append((ra, dec))
-        self.id2radec = dict(sorted(id2radec.items()))
-        return bin_ids
+            id2radec = defaultdict(list)
+            for ra, dec, bin_id in zip(self._df['ra'].values, self._df['dec'].values, bin_ids):
+                id2radec[bin_id].append((ra, dec))
+            self.id2radec = dict(sorted(id2radec.items()))
+            return bin_ids
+        elif binning_method=='healpix':
+            ra_idx = self.statename2stateidx['ra']
+            dec_idx = self.statename2stateidx['dec']
+            indices = self.hpGrid.ang2idx(lon=next_states[:,ra_idx]*deg, lat=next_states[:, dec_idx]*deg)
+            return indices
+        else:
+            raise NotImplementedError
     
     def _get_unique_fields_dict(self, radec_width=.05):
         """Constructs uniform binning across RA/Dec, then decides that all observations within this width are observing the same field.

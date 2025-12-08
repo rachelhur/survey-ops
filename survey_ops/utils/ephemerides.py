@@ -1,5 +1,8 @@
 import ephem
 from datetime import datetime
+import healpy as hp
+import numpy as np
+from survey_ops.utils import units
 
 
 def blanco_observer(time=None):
@@ -264,7 +267,7 @@ class HealpixGrid:
     def get_source_angular_separations(
         self, source, time=None, is_azel=None, observer=None
     ):
-        """
+        """git
         For each pixel stored in the grid, calculate the distance from the pixel's
         center to a source's location (sun, moon, etc.) at a specified time
 
