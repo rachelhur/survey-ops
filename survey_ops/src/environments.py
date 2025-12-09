@@ -1,12 +1,9 @@
 from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
+import pandas as pd
 
 from survey_ops.utils.ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
-
-
-from typing import Optional
-import numpy as np
 
 class BaseTelescope(gym.Env):
     """

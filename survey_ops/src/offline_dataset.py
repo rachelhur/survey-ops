@@ -8,12 +8,22 @@ from survey_ops.utils.ephemerides import *
 import healpy as hp
 
 import pandas as pd
+import json
 
 def reward_func_v0():
     raise NotImplementedError
 
-def standardize(data):
-    return (data - data.mean(axis=0)) / data.std(axis=0)
+def produce_schedule_for_video(outdir, id2radec):
+    field_filepath = outdir + 'fields2radec.json' # field id to ra_dec
+    schedule_filepath = outdir + 'schedule.csv' # keys time and field_id
+
+    # save field_to_radec
+    with open(field_filepath, 'w') as f:
+        json.dump(id2radec, f, indent=2)
+    
+    # save time, field_id, next_field_id
+    df = pd.DataFrame(list(data.items()), columns=['timestamp', 'field_id', 'next_field_id'])
+    df.to_csv(schedule_filepath, index=False)
 
 class OfflineDECamDataset(torch.utils.data.Dataset):
     def __init__(self, 
@@ -27,8 +37,11 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 binning_method = 'healpix',
                 nside=None
                 ):
-        self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'azimuth', 3: 'elevation', 4: 'sun_azimuth', 5: 'sun_elevation',
-                              6: 'moon_azimuth', 7: 'moon_elevation', 8: 'airmass', 9: 'hour_angle', 10: 'timestamp'}
+        self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'azimuth', 3: 'elevation', 
+                                4: 'sun_ra', 5: 'sun_dec', 6: 'sun_azimuth', 7: 'sun_elevation',
+                                8: 'moon_ra', 9: 'moon_dec', 10: 'moon_azimuth', 11: 'moon_elevation',
+                                12: 'airmass', 13: 'ha', 14: 'timestamp'
+                                }
         self.statename2stateidx = {v: k for k, v in self.stateidx2name.items()}
         self.normalize_state = normalize_state
         assert binning_method in ['uniform_grid', 'healpix']
@@ -139,58 +152,62 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         The null observation state is defined as being an array of zeros
         """
         # State vars
-        ra = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
-        dec = np.zeros_like(ra, dtype=np.float32)
-        az = np.zeros_like(ra, dtype=np.float32) # need to add plus 1 for the null observation each night
-        el = np.zeros_like(ra, dtype=np.float32)
-        sun_az = np.zeros_like(ra, dtype=np.float32)
-        sun_el = np.zeros_like(ra, dtype=np.float32)
-        moon_az = np.zeros_like(ra, dtype=np.float32)
-        moon_el = np.zeros_like(ra, dtype=np.float32)
-        airmass = np.zeros_like(ra, dtype=np.float32)
-        ha = np.zeros_like(ra, dtype=np.float32)
-        timestamp = np.zeros_like(ra, dtype=np.int32)
+        all_states = np.zeros(shape=(len(self.stateidx2name), self.n_obs_tot + self.n_nights))
+        # ra = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
+        # dec = np.zeros_like(ra, dtype=np.float32)
+        # az = np.zeros_like(ra, dtype=np.float32) # need to add plus 1 for the null observation each night
+        # el = np.zeros_like(ra, dtype=np.float32)
+        # sun_ra = np.zeros_like(ra, dtype=np.float32)
+        # sun_dec = np.zeros_like(ra, dtype=np.float32)
+        # sun_az = np.zeros_like(ra, dtype=np.float32)
+        # sun_el = np.zeros_like(ra, dtype=np.float32)
+        # moon_ra = np.zeros_like(ra, dtype=np.float32)
+        # moon_dec = np.zeros_like(ra, dtype=np.float32)
+        # moon_az = np.zeros_like(ra, dtype=np.float32)
+        # moon_el = np.zeros_like(ra, dtype=np.float32)
+        # airmass = np.zeros_like(ra, dtype=np.float32)
+        # ha = np.zeros_like(ra, dtype=np.float32)
+        # timestamp = np.zeros_like(ra, dtype=np.int32)
         null_obs_indices = []
 
         # sta
-
-        # Extra info
-        # ra = -1 * np.ones_like(az, dtype=np.float32)
-        # dec = 
         
         for i, ((day, subdf), (_, idxs)) in enumerate(zip(groups, groups.indices.items())):
             indices = idxs + i + 1
             null_obs_indices.append(idxs[0] + i)
-            timestamp[indices] = subdf['timestamp']
-            ra[indices] = subdf['ra'].values
-            dec[indices] = subdf['dec'].values
-            az[indices] = subdf['az'].values
-            el[indices] = 90.0 - subdf['zd'].values
-            airmass[indices] = subdf['airmass'].values
-            ha[indices] = subdf['ha'].values
-            
+            all_states[self.statename2idx['timestamp'], indices] = subdf['timestamp']
+            all_states[self.statename2idx['ra'], indices] = subdf['ra'].values
+            all_states[self.statename2idx['dec'], indices] = subdf['dec'].values
+            all_states[self.statename2idx['az'], indices] = subdf['az'].values
+            all_states[self.statename2idx['el'], indices] = 90.0 - subdf['zd'].values
+            all_states[self.statename2idx['airmass'], indices] = subdf['airmass'].values
+            all_states[self.statename2idx['ha'], indices] = subdf['ha'].values
             
             # Get sun and moon az,el
-            for idx, time in zip(indices, timestamp):
+            for idx, time in zip(indices, all_states[self.statename2idx['timestamp'], indices]):
                 sun_ra, sun_dec = get_source_ra_dec('sun', time=time)
                 moon_ra, moon_dec = get_source_ra_dec('moon', time=time)
-                sun_az[idx], sun_el[idx] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
-                moon_az[idx], moon_el[idx] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
+                all_states[self.statename2idx['sun_ra'], idx] = sun_ra
+                all_states[self.statename2idx['sun_dec'], idx] = sun_dec
+                all_states[self.statename2idx['moon_ra'], idx] = moon_ra
+                all_states[self.statename2idx['moon_dec'], idx] = moon_dec
+                all_states[self.statename2idx['sun_az'], idx], all_states[self.statename2idx['sun_el'], idx] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
+                all_states[self.statename2idx['moon_az'], idx], all_states[self.statename2idx['moon_el'], idx] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 
         null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
-        self.null_mask = np.ones_like(az, dtype=bool)
+        self.null_mask = np.ones_like(all_states[0], dtype=bool)
         self.null_mask[null_obs_indices] = False
-        all_states = np.vstack((ra, dec, az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha, timestamp)).T
+        # all_states = np.vstack((ra, dec, az, el, sun_az, sun_el, moon_az, moon_el, airmass, ha, timestamp)).T
         self._all_states = all_states
         states = np.delete(all_states, null_obs_indices[1:] - 1, axis=0)[:-1]
         next_states = np.delete(all_states, null_obs_indices, axis=0)
 
-        # for diagnostics - delete later
-        self.ra, self.dec, self.az, self.el, self.sun_az, self.sun_el, self.moon_az, self.moon_el, self.airmass, self.ha, self.timestamps = next_states.T.copy()
         return states, next_states
 
-    def _construct_actions(self, next_states, binning_method='uniform_grid', num_bins_1d=None):
-        if binning_method == 'uniform_grid':
+    def _construct_actions(self, next_states, bin_space='radec', binning_method='healpix', num_bins_1d=None):
+        assert bin_space in ['radec', 'azel']
+        assert binning_method in ['uniform_grid', 'healpix']
+        if binning_method == 'uniform_grid' and bin_space == 'azel':
             az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
             # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
             el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
@@ -212,7 +229,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 id2radec[bin_id].append((ra, dec))
             self.id2radec = dict(sorted(id2radec.items()))
             return bin_ids
-        elif binning_method=='healpix':
+        elif binning_method=='healpix' and bin_space=='radec':
             ra_idx = self.statename2stateidx['ra']
             dec_idx = self.statename2stateidx['dec']
             indices = self.hpGrid.ang2idx(lon=next_states[:,ra_idx]*deg, lat=next_states[:, dec_idx]*deg)
@@ -230,12 +247,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         radec_width = .05
         ra_edges = np.arange(np.min(self._df['ra'].values), np.max(self._df['ra'].values), step=radec_width, dtype=np.float32)
         dec_edges = np.arange(np.min(self._df['dec'].values), np.max(self._df['dec'].values), step=radec_width, dtype=np.float32)
-        num_bins
 
         i_x = np.digitize(self._df['ra'].values, ra_edges).astype(np.int32) - 1
         i_y = np.digitize(self._df['dec'].values, dec_edges).astype(np.int32) - 1
         bin_ids = i_x + i_y * (num_bins_1d)
-
 
     def _construct_rewards(self, groups):
         rewards = np.ones(self.num_transitions)
