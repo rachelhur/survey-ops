@@ -210,9 +210,7 @@ def plot_fields(
 
     # initialize figure at selected time
     observer = ephemerides.blanco_observer(time=time)
-    zenith_ra, zenith_dec = ephemerides.topographic_to_equatorial(
-        0, "90", observer=observer
-    )
+    zenith_ra, zenith_dec = ephemerides.get_source_ra_dec("zenith", observer=observer)
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
     # set title to selected time
