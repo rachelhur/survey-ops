@@ -121,10 +121,10 @@ class Agent:
                         except (NameError, StopIteration):
                             eval_iter = iter(dataloader)
                             eval_batch = next(eval_iter)
-                        eval_obs, expert_actions, _, _, _, eval_masks = eval_batch
+                        eval_obs, expert_actions, _, _, _, action_masks = eval_batch
                     else:
                         # --- old method fallback ---
-                        eval_obs, expert_actions, _, _, _, eval_masks = dataset.sample(batch_size)
+                        eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
                     # Test on a batch
                     eval_obs = torch.tensor(eval_obs, device=self.device)
@@ -132,7 +132,8 @@ class Agent:
                     all_q_vals = self.algorithm.policy_net(eval_obs)
                     #TODO include back in when moving to other algorithms besides behavior cloning
                     # might cause crazy evaluative behavior...
-                    # all_q_vals[~action_masks] = float('-inf')
+                    if self.algorithm.name != 'BehaviorCloning':
+                        all_q_vals[~action_masks] = float('-inf')
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())

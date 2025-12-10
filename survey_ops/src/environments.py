@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 
 from survey_ops.utils.ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
+from survey_ops.utils.interpolate import interpolate_on_sphere
+
+#TODO
+# interpolate_on_sphere(az, el, az_data, el_data, values)
 
 class BaseTelescope(gym.Env):
     """

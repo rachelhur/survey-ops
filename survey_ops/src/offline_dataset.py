@@ -35,12 +35,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 specific_days: list = None,
                 specific_filters: list = None,
                 binning_method = 'healpix',
+                bin_space = 'radec',
                 nside=None
                 ):
         self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'az', 3: 'el', 
                                 4: 'sun_ra', 5: 'sun_dec', 6: 'sun_az', 7: 'sun_el',
                                 8: 'moon_ra', 9: 'moon_dec', 10: 'moon_az', 11: 'moon_el',
-                                12: 'airmass', 13: 'ha', 14: 'T_obs_night_fraction'
+                                12: 'airmass', 13: 'ha', 14: 'T_night_fraction'
                                 }
         self.statename2idx = {v: k for k, v in self.stateidx2name.items()}
         self.normalize_state = normalize_state
@@ -95,11 +96,14 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Set dataset-wide (across observation nights) attributes
         self.n_obs_tot = len(df)
         self.num_transitions = len(df) # size of dataset
-        self.num_actions = int(num_bins_1d**2)
+        if binning_method == 'uniform_grid':
+            self.num_actions = int(num_bins_1d**2)
+        elif binning_method == 'healpix':
+            self.num_actions = hp.nside2npix(nside)
         
         # Get transition variables
         states, next_states = self._construct_states(groups)
-        actions = self._construct_actions(next_states, num_bins_1d=num_bins_1d, binning_method=binning_method)
+        actions = self._construct_actions(next_states, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
         rewards = self._construct_rewards(groups)
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
         self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
@@ -117,6 +121,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         
         # Set dimension of observation
         self.obs_dim = self.states.shape[-1]
+
+        # Construct lookup table for scheduling
+        self.idx2radec = {self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg): np.array([lon, lat]) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
+        # Normalize states if specified
         if self.normalize_state:
             self.means = torch.mean(self.next_states, axis=0)
             self.stds = torch.std(self.next_states, axis=0)
@@ -153,24 +161,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         """
         # State vars
         all_states = np.zeros(shape=(self.n_obs_tot + self.n_nights, len(self.stateidx2name)))
-        # ra = np.zeros(shape=(self.n_obs_tot + self.n_nights), dtype=np.float32) # need to add plus 1 for the null observation each night
-        # dec = np.zeros_like(ra, dtype=np.float32)
-        # az = np.zeros_like(ra, dtype=np.float32) # need to add plus 1 for the null observation each night
-        # el = np.zeros_like(ra, dtype=np.float32)
-        # sun_ra = np.zeros_like(ra, dtype=np.float32)
-        # sun_dec = np.zeros_like(ra, dtype=np.float32)
-        # sun_az = np.zeros_like(ra, dtype=np.float32)
-        # sun_el = np.zeros_like(ra, dtype=np.float32)
-        # moon_ra = np.zeros_like(ra, dtype=np.float32)
-        # moon_dec = np.zeros_like(ra, dtype=np.float32)
-        # moon_az = np.zeros_like(ra, dtype=np.float32)
-        # moon_el = np.zeros_like(ra, dtype=np.float32)
-        # airmass = np.zeros_like(ra, dtype=np.float32)
-        # ha = np.zeros_like(ra, dtype=np.float32)
-        # timestamp = np.zeros_like(ra, dtype=np.int32)
         null_obs_indices = []
-
-        # sta
         
         for i, ((day, subdf), (_, idxs)) in enumerate(zip(groups, groups.indices.items())):
             indices = idxs + i + 1
@@ -199,9 +190,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 all_states[idx, self.statename2idx['sun_az']], all_states[idx, self.statename2idx['sun_el']] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
                 all_states[idx, self.statename2idx['moon_az']], all_states[idx, self.statename2idx['moon_el']] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 if T_night == 0 and time - timestamps[0] == 0:
-                    all_states[idx, self.statename2idx['T_obs_night_fraction']] = 0.
+                    all_states[idx, self.statename2idx['T_night_fraction']] = 0.
                 else:   
-                    all_states[idx, self.statename2idx['T_obs_night_fraction']] = (time - timestamps[0]) / T_night
+                    all_states[idx, self.statename2idx['T_night_fraction']] = (time - timestamps[0]) / T_night
          
         null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
         self.null_mask = np.ones(shape=all_states.shape[0], dtype=bool)
@@ -216,19 +207,21 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         assert bin_space in ['radec', 'azel']
         assert binning_method in ['uniform_grid', 'healpix']
         if binning_method == 'uniform_grid' and bin_space == 'azel':
+            az_idx = self.statename2idx['az']
+            el_idx = self.statename2idx['el']
             az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
             # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
-            el_edges = np.linspace(27, 90, num_bins_1d + 1, dtype=np.float32)
+            el_edges = np.linspace(0, 90, num_bins_1d + 1, dtype=np.float32)
             # az_centers = el_edges[:-1] + (el_edges[1] - el_edges[0])/2
 
-            i_x = np.digitize(next_states[:, 0], az_edges).astype(np.int32) - 1
-            i_y = np.digitize(next_states[:, 1], el_edges).astype(np.int32) - 1
+            i_x = np.digitize(next_states[:, az_idx], az_edges).astype(np.int32) - 1
+            i_y = np.digitize(next_states[:, el_idx], el_edges).astype(np.int32) - 1
             bin_ids = i_x + i_y * (num_bins_1d)
             self.az_edges = az_edges
             self.el_edges = el_edges
             
             id2azel = defaultdict(list)
-            for az, el, bin_id in zip(next_states[:, 0], next_states[:, 1], bin_ids):
+            for az, el, bin_id in zip(next_states[:, az_idx], next_states[:, el_idx], bin_ids):
                 id2azel[bin_id].append((az, el))            
             self.id2azel = dict(sorted(id2azel.items()))
 
@@ -236,7 +229,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             for ra, dec, bin_id in zip(self._df['ra'].values, self._df['dec'].values, bin_ids):
                 id2radec[bin_id].append((ra, dec))
             self.id2radec = dict(sorted(id2radec.items()))
+
             return bin_ids
+        
         elif binning_method=='healpix' and bin_space=='radec':
             ra_idx = self.statename2idx['ra']
             dec_idx = self.statename2idx['dec']
@@ -284,6 +279,27 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             pin_memory=pin_memory
         )
         return loader
+    
+    def save_schedule_for_video(self, outdir):
+        # def produce_schedule_for_video(outdir, id2radec):
+        field_filepath = outdir + 'fields2radec.json' # field id to ra_dec
+        schedule_filepath = outdir + 'true_schedule.csv' # keys time and field_id
+
+        idx2radec = {key: np.float64(items*deg).tolist() for key, items in self.idx2radec.items()}
+        # save field_to_radec
+        with open(field_filepath, 'w') as f:
+            json.dump(idx2radec, f, indent=2)
+        
+        # save time, field_id, next_field_id
+        timestamps = self._df['timestamp'].values.tolist()
+        all_field_ids = self.hpGrid.ang2idx(lon=self._df['ra'].values*deg, lat=self._df['dec'].values*deg).tolist()
+        field_ids = all_field_ids
+        next_field_ids = all_field_ids[1:] + [None]
+        data = {'time': timestamps, 'field_id': field_ids, 'next_field_id': next_field_ids}
+        df = pd.DataFrame(data)
+        df.to_csv(schedule_filepath, index=False)
+
+
 
 class TelescopeDatasetv0:
     """

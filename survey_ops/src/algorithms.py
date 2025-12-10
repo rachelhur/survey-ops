@@ -160,8 +160,11 @@ class BehaviorCloning(AlgorithmBase):
         obs, expert_actions, rewards, next_obs, dones, action_masks = batch
         
         # convert to tensors
-        obs = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32)
-        expert_actions = torch.tensor(expert_actions, device=self.device, dtype=torch.long) # needs to be long for .gather()
+        if not torch.is_tensor(obs):
+            obs = torch.tensor(np.array(obs), dtype=torch.float32)
+            expert_actions = torch.tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
+        obs = obs.to(device=self.device, dtype=torch.float32)
+        expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
         action_logits = self.policy_net(obs)
         
         loss = self.loss_fxn(action_logits, expert_actions)
@@ -175,10 +178,13 @@ class BehaviorCloning(AlgorithmBase):
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
-            obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+            if not torch.is_tensor(obs):
+                obs = torch.tensor(obs, dtype=torch.float32)
+                mask = torch.tensor(action_mask, dtype=torch.bool)
+            obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
+            mask = mask.to(self.device, dtype=torch.bool).unsqueeze(0)
             action_logits = self.policy_net(obs)
             # mask invalid actions
-            mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool).unsqueeze(0)
             action_logits[~mask] = float('-inf')
             action = torch.argmax(action_logits, dim=1)
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
