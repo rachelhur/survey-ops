@@ -139,6 +139,47 @@ def galactic_to_equatorial(l, b):
     return ra if np.iterable(ra) else ra.item(), dec if np.iterable(dec) else dec.item()
 
 
+def equatorial_to_hour_angle(ra, dec, time=None, observer=None):
+    """
+    Compute hour angle of specified RA/Dec coordinate at a specified time. Uses the
+    convention bounded to (-pi, pi].
+
+    Arguments
+    ---------
+    ra : float or array of floats
+        Right ascension in radians
+    dec : float or array of floats
+        Declination in radians
+    time : float [None]
+        Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
+
+    Returns
+    -------
+    hour_angle : float or array of floats
+        Hour angle in radians of the requested coordinates.
+    """
+
+    # initialize observer location and time
+    observer = observer if observer is not None else blanco_observer(time=time)
+
+    # ephem is not vectorizable, so compute each conversion separately
+    hour_angle = []
+    for r, d in zip(np.atleast_1d(ra), np.atleast_1d(dec)):
+        # define position in equatorial coordinates
+        source = ephem.FixedBody()
+        source._ra = r
+        source._dec = d
+
+        # compute topographic position for the observer
+        source.compute(observer)
+        hour_angle.append(source.ha.znorm)
+
+    # return outputs
+    return hour_angle[0] if len(hour_angle) == 1 else np.asarray(hour_angle)
+
+
 def get_source_ra_dec(source, time=None, observer=None):
     """
     Get the astrophysical coordinates of a known source using pyephem.
@@ -366,3 +407,35 @@ class HealpixGrid:
         airmass[el > 0] = 1 / np.cos(90 * units.deg - el[el > 0])
 
         return airmass
+
+    def get_hour_angle(self, time=None, observer=None):
+        """
+        For each pixel stored in the grid, calculate the hour angle.
+
+        Arguments
+        ---------
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, default to Blanco observer at chosen time.
+
+        Returns
+        -------
+        hour_angle : array of floats
+            Hour angle for each pixel.
+        """
+
+        # get equatorial coordinates of each pixel
+        if self.is_azel:
+            ra, dec = topographic_to_equatorial(
+                az=self.lon, el=self.lat, time=time, observer=observer
+            )
+        else:
+            ra, dec = self.lon, self.lat
+
+        # calculate hour angle
+        hour_angle = equatorial_to_hour_angle(
+            ra=ra, dec=dec, time=time, observer=observer
+        )
+
+        return hour_angle
