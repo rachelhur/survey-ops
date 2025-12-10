@@ -35,42 +35,6 @@ def blanco_observer(time=None):
     return observer
 
 
-def get_source_ra_dec(source, time=None, observer=None):
-    """
-    Get the astrophysical coordinates of a known source using pyephem.
-
-    Arguments
-    ---------
-    src : str
-        Source name. Options: "moon", "sun"
-    time : float [None]
-        Time (Unix timestamp, in UTC) at which to determine position. Default: now.
-    observer : ephem.Observer [None]
-        Observer object. If not provided, defaults to Blanco observer at chosen time.
-
-    Returns
-    -------
-    ra, dec : float
-        Source position in radians
-    """
-
-    # create observer at Blanco telescope
-    observer = observer if observer is not None else blanco_observer(time=time)
-
-    # grab ephem object for the source
-    source = source.lower()
-    if source == "moon":
-        body = ephem.Moon()
-    elif source == "sun":
-        body = ephem.Sun()
-    else:
-        raise NotImplementedError("Getting ephemerides for invalid source: " + source)
-
-    # compute source location
-    body.compute(observer)
-    return body.ra, body.dec
-
-
 def equatorial_to_topographic(ra, dec, time=None, observer=None):
     """
     Convert RA/Dec to Az/El for the Blanco telescope location.
@@ -173,6 +137,46 @@ def galactic_to_equatorial(l, b):
     ra, dec = icrs.ra.rad, icrs.dec.rad
 
     return ra if np.iterable(ra) else ra.item(), dec if np.iterable(dec) else dec.item()
+
+
+def get_source_ra_dec(source, time=None, observer=None):
+    """
+    Get the astrophysical coordinates of a known source using pyephem.
+
+    Arguments
+    ---------
+    source : str
+        Source name. Options: "moon", "sun", "zenith"
+    time : float [None]
+        Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
+
+    Returns
+    -------
+    ra, dec : float
+        Source position in radians
+    """
+
+    # check validity of source
+    source = source.lower()
+    if source not in {"zenith", "moon", "sun"}:
+        raise NotImplementedError("Getting ephemerides for invalid source: " + source)
+
+    # create observer at Blanco telescope
+    observer = observer if observer is not None else blanco_observer(time=time)
+
+    # compute zenith location
+    if source == "zenith":
+        return topographic_to_equatorial(0, 90 * units.deg, observer=observer)
+
+    # compute locations for pyephem sources
+    elif source == "moon":
+        body = ephem.Moon()
+    elif source == "sun":
+        body = ephem.Sun()
+    body.compute(observer)
+    return body.ra, body.dec
 
 
 class HealpixGrid:
@@ -278,7 +282,7 @@ class HealpixGrid:
         Arguments
         ---------
         src : str
-            Source name. Options: "moon", "sun"
+            Source name. Options: "moon", "sun", "zenith"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
         observer : ephem.Observer [None]
@@ -308,7 +312,7 @@ class HealpixGrid:
         Arguments
         ---------
         src : str
-            Source name. Options: "moon", "sun"
+            Source name. Options: "moon", "sun", "zenith"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
         observer : ephem.Observer [None]
