@@ -1,6 +1,9 @@
 import ephem
 from datetime import datetime
+<<<<<<< HEAD
 import healpy as hp
+=======
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
 import numpy as np
 from survey_ops.utils import units
 
@@ -36,6 +39,7 @@ def blanco_observer(time=None):
     return observer
 
 
+<<<<<<< HEAD
 def get_source_ra_dec(source, time=None, observer=None):
     """
     Get the astrophysical coordinates of a known source using pyephem.
@@ -72,15 +76,17 @@ def get_source_ra_dec(source, time=None, observer=None):
     return body.ra, body.dec
 
 
+=======
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
 def equatorial_to_topographic(ra, dec, time=None, observer=None):
     """
     Convert RA/Dec to Az/El for the Blanco telescope location.
 
     Arguments
     ---------
-    ra : float
+    ra : float or array of floats
         Right ascension in radians
-    dec : float
+    dec : float or array of floats
         Declination in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -96,14 +102,24 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
     # initialize observer location and time
     observer = observer if observer is not None else blanco_observer(time=time)
 
-    # define position in equatorial coordinates
-    source = ephem.FixedBody()
-    source._ra = ra
-    source._dec = dec
+    # ephem is not vectorizable, so compute each conversion separately
+    az, el = [], []
+    for r, d in zip(np.atleast_1d(ra), np.atleast_1d(dec)):
+        # define position in equatorial coordinates
+        source = ephem.FixedBody()
+        source._ra = r
+        source._dec = d
 
-    # compute topographic position for the observer
-    source.compute(observer)
-    return source.az, source.alt
+        # compute topographic position for the observer
+        source.compute(observer)
+        az.append(source.az)
+        el.append(source.alt)
+
+    # return outputs
+    if len(az) == 1:
+        return az[0], el[0]
+    else:
+        return np.asarray(az), np.asarray(el)
 
 
 def topographic_to_equatorial(az, el, time=None, observer=None):
@@ -112,9 +128,9 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
 
     Arguments
     ---------
-    az : float
+    az : floats or arrays of floats
         Azimuth in radians
-    el : float
+    el : float or arrays of floats
         Elevation in radians
     time : float [None]
         Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -131,9 +147,13 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
     observer = observer if observer is not None else blanco_observer(time=time)
 
     # compute topographic position for the observer
-    return observer.radec_of(az, el)
+    if np.iterable(az):
+        return np.array([observer.radec_of(a, e) for a, e in zip(az, el)]).T
+    else:
+        return observer.radec_of(az, el)
 
 
+<<<<<<< HEAD
 class HealpixGrid:
     """
     A class for creating a grid over lon/lat (equiv az/el, ra/dec) using healpix.
@@ -163,13 +183,159 @@ class HealpixGrid:
         self.heal_idx = np.arange(self.npix)
         self.idx_lookup = {heal_i: i for i, heal_i in enumerate(self.heal_idx)}
 
+=======
+def galactic_to_equatorial(l, b):
+    """
+    Convert galactic longitude l / latitude b to equatorial Ra/Dec.
+
+    Arguments
+    ---------
+    l, b : floats or arrays of floats
+        Galactic longitude and latitude in radians
+
+    Returns
+    -------
+    ra, dec : floats or arrays of floats
+        Right ascension and declination in radians
+    """
+    from astropy.coordinates import SkyCoord
+
+    # convert units
+    gal = SkyCoord(
+        l=np.asarray(l) / units.deg,
+        b=np.asarray(b) / units.deg,
+        frame="galactic",
+        unit="deg",
+    )
+    icrs = gal.icrs
+    ra, dec = icrs.ra.rad, icrs.dec.rad
+
+    return ra if np.iterable(ra) else ra.item(), dec if np.iterable(dec) else dec.item()
+
+
+def equatorial_to_hour_angle(ra, dec, time=None, observer=None):
+    """
+    Compute hour angle of specified RA/Dec coordinate at a specified time. Uses the
+    convention bounded to (-pi, pi].
+
+    Arguments
+    ---------
+    ra : float or array of floats
+        Right ascension in radians
+    dec : float or array of floats
+        Declination in radians
+    time : float [None]
+        Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
+
+    Returns
+    -------
+    hour_angle : float or array of floats
+        Hour angle in radians of the requested coordinates.
+    """
+
+    # initialize observer location and time
+    observer = observer if observer is not None else blanco_observer(time=time)
+
+    # ephem is not vectorizable, so compute each conversion separately
+    hour_angle = []
+    for r, d in zip(np.atleast_1d(ra), np.atleast_1d(dec)):
+        # define position in equatorial coordinates
+        source = ephem.FixedBody()
+        source._ra = r
+        source._dec = d
+
+        # compute topographic position for the observer
+        source.compute(observer)
+        hour_angle.append(source.ha.znorm)
+
+    # return outputs
+    return hour_angle[0] if len(hour_angle) == 1 else np.asarray(hour_angle)
+
+
+def get_source_ra_dec(source, time=None, observer=None):
+    """
+    Get the astrophysical coordinates of a known source using pyephem.
+
+    Arguments
+    ---------
+    source : str
+        Source name. Options: "moon", "sun", "zenith"
+    time : float [None]
+        Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+    observer : ephem.Observer [None]
+        Observer object. If not provided, defaults to Blanco observer at chosen time.
+
+    Returns
+    -------
+    ra, dec : float
+        Source position in radians
+    """
+
+    # check validity of source
+    source = source.lower()
+    if source not in {"zenith", "moon", "sun"}:
+        raise NotImplementedError("Getting ephemerides for invalid source: " + source)
+
+    # create observer at Blanco telescope
+    observer = observer if observer is not None else blanco_observer(time=time)
+
+    # compute zenith location
+    if source == "zenith":
+        return topographic_to_equatorial(0, 90 * units.deg, observer=observer)
+
+    # compute locations for pyephem sources
+    elif source == "moon":
+        body = ephem.Moon()
+    elif source == "sun":
+        body = ephem.Sun()
+    body.compute(observer)
+    return body.ra, body.dec
+
+
+class HealpixGrid:
+    """
+    A class for creating a grid over az/el or ra/dec using healpix.
+    """
+
+    def __init__(self, nside, is_azel=True):
+        """
+        Initialize the grid.
+
+        Arguments
+        ---------
+        nside : int
+            The healpix resolution parameter. npix = 12 * nside^2
+        is_azel : bool [True]
+            Whether grid points (labeled as lon/lat) represent az/el (True) or ra/dec
+            (False). If True, only pixels in the visible hemisphere (el > 0) are kept.
+        """
+        import healpy as hp
+        import numpy as np
+        from survey_ops.utils import units
+
+        # store initial arguments
+        self.nside = nside
+        self.is_azel = is_azel
+
+        # track native healpix indices, which may change when pixels are sorted/filtered
+        self.npix = hp.nside2npix(self.nside)
+        self.heal_idx = np.arange(self.npix)
+        self.idx_lookup = {heal_i: i for i, heal_i in enumerate(self.heal_idx)}
+
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
         # get pixel centers in spherical coords (supplied in deg)
         self.lon, self.lat = hp.pix2ang(self.nside, self.heal_idx, lonlat=True)
         self.lon *= units.deg
         self.lat *= units.deg
 
         # keep only bins above the horizon
+<<<<<<< HEAD
         if hemisphere:
+=======
+        if self.is_azel:
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
             keep = self.lat > 0
             self.lon = self.lon[keep]
             self.lat = self.lat[keep]
@@ -184,7 +350,12 @@ class HealpixGrid:
         Arguments
         ---------
         lon, lat : float, scalars or array-like
+<<<<<<< HEAD
             Angular coordinates of a point on the sphere
+=======
+            Angular coordinates of a point on the sphere. Provide in the same coordinate
+            system as the native pixel system (i.e. az/el if self.is_azel, else ra/dec)
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
 
         Returns
         -------
@@ -228,13 +399,18 @@ class HealpixGrid:
 
         return angular_separation((lon, lat), (self.lon, self.lat))
 
+<<<<<<< HEAD
     def get_source_idx(self, source, time=None, is_azel=None, observer=None):
+=======
+    def get_source_idx(self, source, time=None, observer=None):
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
         """
         Determine the pixel of a source's location (sun, moon, etc.) at a specified time
 
         Arguments
         ---------
         src : str
+<<<<<<< HEAD
             Source name. Options: "moon", "sun"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -242,6 +418,11 @@ class HealpixGrid:
             Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
             ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
             often used for making an az/el grid; specifying overrides this assumption.
+=======
+            Source name. Options: "moon", "sun", "zenith"
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
         observer : ephem.Observer [None]
             Observer object. If not provided, defaults to Blanco observer at chosen time
 
@@ -251,12 +432,18 @@ class HealpixGrid:
             Index of pixel the source is in. Returns None for pos outside the grid
         """
 
+<<<<<<< HEAD
         # determine if grid is az/el or ra/dec
         is_azel = self.hemisphere if is_azel is None else is_azel
 
         # get the source position
         lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
         if is_azel:
+=======
+        # get the source position
+        lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
+        if self.is_azel:
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
             lon, lat = equatorial_to_topographic(
                 ra=lon, dec=lat, time=time, observer=observer
             )
@@ -264,16 +451,22 @@ class HealpixGrid:
         # get sky bin index
         return self.ang2idx(lon=lon, lat=lat)
 
+<<<<<<< HEAD
     def get_source_angular_separations(
         self, source, time=None, is_azel=None, observer=None
     ):
         """git
+=======
+    def get_source_angular_separations(self, source, time=None, observer=None):
+        """
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
         For each pixel stored in the grid, calculate the distance from the pixel's
         center to a source's location (sun, moon, etc.) at a specified time
 
         Arguments
         ---------
         src : str
+<<<<<<< HEAD
             Source name. Options: "moon", "sun"
         time : float [None]
             Time (Unix timestamp, in UTC) at which to determine position. Default: now.
@@ -281,6 +474,11 @@ class HealpixGrid:
             Whether the HealpixGrid is assumed to be binning the sky in az/el (True) or
             ra/dec (False) coordinates. Default assumes self.hemisphere, as that is
             often used for making an az/el grid; specifying overrides this assumption.
+=======
+            Source name. Options: "moon", "sun", "zenith"
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
         observer : ephem.Observer [None]
             Observer object. If not provided, defaults to Blanco observer at chosen time
 
@@ -290,15 +488,89 @@ class HealpixGrid:
             Angular separations between pixel centers and the requested lon/lat position
         """
 
+<<<<<<< HEAD
         # determine if grid is az/el or ra/dec
         is_azel = self.hemisphere if is_azel is None else is_azel
 
         # get the source position
         lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
         if is_azel:
+=======
+        # get the source position
+        lon, lat = get_source_ra_dec(source=source, time=time, observer=observer)
+        if self.is_azel:
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
             lon, lat = equatorial_to_topographic(
                 ra=lon, dec=lat, time=time, observer=observer
             )
 
         # get sky bin distances
         return self.get_angular_separations(lon=lon, lat=lat)
+<<<<<<< HEAD
+=======
+
+    def get_airmass(self, time=None, observer=None):
+        """
+        For each pixel stored in the grid, calculate the airmass.
+
+        Arguments
+        ---------
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+            Ignored if is_azel is True.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, default to Blanco observer at chosen time.
+            Ignored if is_azel is True.
+
+        Returns
+        -------
+        airmass : array of floats
+            Airmass for each pixel. Pixels at or below the horizon default to np.inf
+        """
+        # get elevation of each pixel
+        if self.is_azel:
+            el = self.lat
+        else:
+            az, el = equatorial_to_topographic(
+                ra=self.lon, dec=self.lat, time=time, observer=observer
+            )
+
+        # calculate airmass
+        airmass = np.ones_like(el)
+        airmass[el <= 0] = np.inf
+        airmass[el > 0] = 1 / np.cos(90 * units.deg - el[el > 0])
+
+        return airmass
+
+    def get_hour_angle(self, time=None, observer=None):
+        """
+        For each pixel stored in the grid, calculate the hour angle.
+
+        Arguments
+        ---------
+        time : float [None]
+            Time (Unix timestamp, in UTC) at which to determine position. Default: now.
+        observer : ephem.Observer [None]
+            Observer object. If not provided, default to Blanco observer at chosen time.
+
+        Returns
+        -------
+        hour_angle : array of floats
+            Hour angle for each pixel.
+        """
+
+        # get equatorial coordinates of each pixel
+        if self.is_azel:
+            ra, dec = topographic_to_equatorial(
+                az=self.lon, el=self.lat, time=time, observer=observer
+            )
+        else:
+            ra, dec = self.lon, self.lat
+
+        # calculate hour angle
+        hour_angle = equatorial_to_hour_angle(
+            ra=ra, dec=dec, time=time, observer=observer
+        )
+
+        return hour_angle
+>>>>>>> e0894c547d281356725760cdbad6faa992191e66
