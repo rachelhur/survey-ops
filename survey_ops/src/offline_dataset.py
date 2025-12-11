@@ -13,22 +13,34 @@ import json
 def reward_func_v0():
     raise NotImplementedError
 
-def produce_schedule_for_video(outdir, id2radec):
+def save_schedule_for_video(outdir, df, return_outputs=False):
+    # def produce_schedule_for_video(outdir, id2radec):
     field_filepath = outdir + 'fields2radec.json' # field id to ra_dec
-    schedule_filepath = outdir + 'schedule.csv' # keys time and field_id
+    schedule_filepath = outdir + 'true_schedule.csv' # keys time and field_id
 
+    timestamps = df['timestamp'].values.tolist()
+    ra = df['ra'].values
+    dec = df['dec'].values
+
+    id2radec = {i: np.float64([ra, dec]).tolist() for i, (ra, dec) in enumerate(zip(ra, dec))}
+    radec2id = {tuple(v): k for k, v in id2radec.items()}  
     # save field_to_radec
     with open(field_filepath, 'w') as f:
         json.dump(id2radec, f, indent=2)
     
     # save time, field_id, next_field_id
-    df = pd.DataFrame(list(data.items()), columns=['timestamp', 'field_id', 'next_field_id'])
-    df.to_csv(schedule_filepath, index=False)
+    field_ids = [radec2id[(ra_, dec_)] for ra_, dec_ in zip(ra, dec)]
+    data = {'time': timestamps, 'field_id': field_ids}
+    schedule_df = pd.DataFrame(data)
+    schedule_df.to_csv(schedule_filepath, index=False)
+
+    if return_outputs:
+        return id2radec, schedule_df
+
 
 class OfflineDECamDataset(torch.utils.data.Dataset):
     def __init__(self, 
                 df: pd.DataFrame, 
-                num_bins_1d = 10,
                 normalize_state: bool = True, 
                 specific_years: list = None,
                 specific_months: list = None,
@@ -36,19 +48,22 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 specific_filters: list = None,
                 binning_method = 'healpix',
                 bin_space = 'radec',
-                nside=None
+                nside=None,
+                num_bins_1d = None,
                 ):
         self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'az', 3: 'el', 
                                 4: 'sun_ra', 5: 'sun_dec', 6: 'sun_az', 7: 'sun_el',
                                 8: 'moon_ra', 9: 'moon_dec', 10: 'moon_az', 11: 'moon_el',
                                 12: 'airmass', 13: 'ha', 14: 'T_night_fraction'
                                 }
+                            #  'zenith_ra': , 'zenith_dec': ,
         self.statename2idx = {v: k for k, v in self.stateidx2name.items()}
         self.normalize_state = normalize_state
         assert binning_method in ['uniform_grid', 'healpix']
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None)
         if binning_method == 'healpix':
             self.hpGrid = HealpixGrid(nside=nside, hemisphere=False)
+            self.binid2radec = {hp_idx: np.array([lon, lat]) for hp_idx, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon / deg, self.hpGrid.lat / deg))}
         else:
             self.hpGrid = None
 
@@ -67,10 +82,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             cols = df.select_dtypes(include=[str_bit]).columns
             df[cols] = df[cols].astype(np_bit)
         
-        # Set the DataFrame index as its datetime
-        # df = df.set_index('datetime')
-        # df.index = ((df.index) - pd.Timedelta(hours=np.max(np.unique(df.index.hour))))
-        # df = df[df.index.year != 1970]
+        # Sort dataframe into observation nights (noon to noon)
         df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
         # Get observations for specific years, days, filters, etc.
@@ -84,6 +96,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df = df[df['filter'].isin(specific_filters)]
         # remove observations in 1970 - what are these?
         df = df[df['night'].dt.year != 1970]
+        assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
         self._df = df # save for diagnostics - #TODO remove when all is tested
         
         # Group observations by observation night
@@ -104,12 +117,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Get transition variables
         states, next_states = self._construct_states(groups)
         actions = self._construct_actions(next_states, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
-        rewards = self._construct_rewards(groups)
+        rewards = self._construct_rewards(df)
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
         self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
         dones[self._done_indices] = True
         dones[-1] = True
-        action_masks = self._construct_action_masks()
+        action_masks = self._construct_action_masks(timestamps=df['timestamp'].values)
 
         # Save transitions as tensors and instatiate as attributes
         self.states = torch.tensor(states, dtype=torch.float32)
@@ -123,7 +136,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.obs_dim = self.states.shape[-1]
 
         # Construct lookup table for scheduling
-        self.idx2radec = {self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg): np.array([lon, lat]) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
+        self.fieldradec2bin = {(lon, lat): self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
         # Normalize states if specified
         if self.normalize_state:
             self.means = torch.mean(self.next_states, axis=0)
@@ -166,7 +179,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         for i, ((day, subdf), (_, idxs)) in enumerate(zip(groups, groups.indices.items())):
             indices = idxs + i + 1
             null_obs_indices.append(idxs[0] + i)
-            timestamps = subdf['timestamp'].values
+            
+            # State vars that are already in dataframe
             all_states[indices, self.statename2idx['ra']] = subdf['ra'].values
             all_states[indices, self.statename2idx['dec']] = subdf['dec'].values
             all_states[indices, self.statename2idx['az']] = subdf['az'].values
@@ -174,12 +188,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             all_states[indices, self.statename2idx['airmass']] = subdf['airmass'].values
             all_states[indices, self.statename2idx['ha']] = subdf['ha'].values
 
-            T_night = subdf['timestamp'].values[-1] - subdf['timestamp'].values[0]
+            timestamps = subdf['timestamp'].values
+            T_night = timestamps[-1] - timestamps[0]
             # if T_night == 0:
             #     print(f'BAD (T_obs) at {i}, indices {indices}')
             #     print(len(subdf))
             
-            # Get sun and moon az,el
+            # State vars that we need to calculate 
             for idx, time in zip(indices, timestamps):
                 sun_ra, sun_dec = get_source_ra_dec('sun', time=time)
                 moon_ra, moon_dec = get_source_ra_dec('moon', time=time)
@@ -190,8 +205,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 all_states[idx, self.statename2idx['sun_az']], all_states[idx, self.statename2idx['sun_el']] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
                 all_states[idx, self.statename2idx['moon_az']], all_states[idx, self.statename2idx['moon_el']] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 if T_night == 0 and time - timestamps[0] == 0:
+                    # if only one observation this night, set T_night_fraction to 0 and avoid division by 0
                     all_states[idx, self.statename2idx['T_night_fraction']] = 0.
-                else:   
+                else:
                     all_states[idx, self.statename2idx['T_night_fraction']] = (time - timestamps[0]) / T_night
          
         null_obs_indices = np.array(null_obs_indices, dtype=np.int32)
@@ -206,6 +222,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _construct_actions(self, next_states, bin_space='radec', binning_method='healpix', num_bins_1d=None):
         assert bin_space in ['radec', 'azel']
         assert binning_method in ['uniform_grid', 'healpix']
+
         if binning_method == 'uniform_grid' and bin_space == 'azel':
             az_idx = self.statename2idx['az']
             el_idx = self.statename2idx['el']
@@ -240,7 +257,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         else:
             raise NotImplementedError
     
-    def _get_unique_fields_dict(self, radec_width=.05):
+    def _get_unique_fields_dict(self, df, radec_width=.05):
         """Constructs uniform binning across RA/Dec, then decides that all observations within this width are observing the same field.
 
         Args
@@ -248,21 +265,23 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         radec_width (float): the bin width in degrees
         """
         radec_width = .05
-        ra_edges = np.arange(np.min(self._df['ra'].values), np.max(self._df['ra'].values), step=radec_width, dtype=np.float32)
-        dec_edges = np.arange(np.min(self._df['dec'].values), np.max(self._df['dec'].values), step=radec_width, dtype=np.float32)
+        ra_edges = np.arange(np.min(df['ra'].values), np.max(df['ra'].values), step=radec_width, dtype=np.float32)
+        dec_edges = np.arange(np.min(df['dec'].values), np.max(df['dec'].values), step=radec_width, dtype=np.float32)
 
-        i_x = np.digitize(self._df['ra'].values, ra_edges).astype(np.int32) - 1
-        i_y = np.digitize(self._df['dec'].values, dec_edges).astype(np.int32) - 1
+        i_x = np.digitize(df['ra'].values, ra_edges).astype(np.int32) - 1
+        i_y = np.digitize(df['dec'].values, dec_edges).astype(np.int32) - 1
         bin_ids = i_x + i_y * (num_bins_1d)
         raise NotImplementedError
 
-    def _construct_rewards(self, groups):
-        rewards = np.ones(self.num_transitions)
-        for ((day, subdf), (_, idxs)) in zip(groups, groups.indices.items()):
-            rewards[idxs] = subdf['teff']
+    def _construct_rewards(self, df):
+        """Constructs rewards for all transitions. Reward is defined as teff, normalized to [0, 1]."""
+        rewards = df['teff'].values
+        rewards -= np.min(rewards)
+        rewards /= np.max(rewards)
         return rewards
 
-    def _construct_action_masks(self):
+    def _construct_action_masks(self, timestamps=None):
+        # given timestamp, determine bins which are outside of observable range
         return np.ones((self.num_transitions, self.num_actions), dtype=bool)
 
     def get_dataloader(self, batch_size, num_workers, pin_memory):
@@ -279,27 +298,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             pin_memory=pin_memory
         )
         return loader
-    
-    def save_schedule_for_video(self, outdir):
-        # def produce_schedule_for_video(outdir, id2radec):
-        field_filepath = outdir + 'fields2radec.json' # field id to ra_dec
-        schedule_filepath = outdir + 'true_schedule.csv' # keys time and field_id
-
-        idx2radec = {key: np.float64(items*deg).tolist() for key, items in self.idx2radec.items()}
-        # save field_to_radec
-        with open(field_filepath, 'w') as f:
-            json.dump(idx2radec, f, indent=2)
-        
-        # save time, field_id, next_field_id
-        timestamps = self._df['timestamp'].values.tolist()
-        all_field_ids = self.hpGrid.ang2idx(lon=self._df['ra'].values*deg, lat=self._df['dec'].values*deg).tolist()
-        field_ids = all_field_ids
-        next_field_ids = all_field_ids[1:] + [None]
-        data = {'time': timestamps, 'field_id': field_ids, 'next_field_id': next_field_ids}
-        df = pd.DataFrame(data)
-        df.to_csv(schedule_filepath, index=False)
-
-
 
 class TelescopeDatasetv0:
     """

@@ -40,7 +40,7 @@ class DDQN(AlgorithmBase):
     optimizer_kwargs (optional): 
     """
 
-    def __init__(self, obs_dim, action_dim, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
+    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
                  use_lr_scheduler=False, num_steps=None, **optimizer_kwargs):
         super().__init__()
         self.name = 'DDQN'
@@ -48,8 +48,8 @@ class DDQN(AlgorithmBase):
         self.tau = tau
         self.device = device
 
-        self.policy_net = DQN(obs_dim, action_dim, hidden_dim).to(device)
-        self.target_net = DQN(obs_dim, action_dim, hidden_dim).to(device)
+        self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
+        self.target_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.use_double = use_double
 
@@ -65,14 +65,23 @@ class DDQN(AlgorithmBase):
     def train_step(self, batch):
         
         obs, actions, rewards, next_obs, dones, action_masks = batch
+        if not torch.is_tensor(obs):
+            obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
+            actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
+            rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+            next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
+            dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
+            action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
+            
         # convert to tensors
-        obs = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32)
-        actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
-        rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
-        next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
-        dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
-        action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
-        
+        else:
+            obs = obs.to(device=self.device, dtype=torch.float32)
+            actions = actions.to(device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
+            rewards = rewards.to(device=self.device, dtype=torch.float32)
+            next_obs = next_obs.to(device=self.device, dtype=torch.float32)
+            dones = dones.to(device=self.device, dtype=torch.float32)
+            action_masks = action_masks.to(device=self.device, dtype=torch.bool)
+            
         # need to input (batch_size, obs_dim) into net - if obs_dim is 1, we get 1d tensor. Need to reshape
         if obs.dim() == 1:
             obs = obs.unsqueeze(1)
@@ -93,7 +102,6 @@ class DDQN(AlgorithmBase):
                 next_q_targ = self.target_net(next_obs).gather(1, next_actions_pol.unsqueeze(1)).squeeze(1)
 
                 td_target = rewards + self.gamma * (1 - dones) * next_q_targ
-
             else:
                 next_q = self.target_net(next_obs)
                 # mask invalid actions
@@ -110,7 +118,8 @@ class DDQN(AlgorithmBase):
             if param.grad is not None:
                 if torch.isnan(param.grad).any():
                     print(f"NaN gradient in {name}")
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.)
+        prev_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.)
+        # print(f"Max Gradient Norm: {prev_grad_norm.item()}")
         self.optimizer.step()
         if self.use_lr_scheduler:
             self.scheduler.step()

@@ -130,17 +130,14 @@ class Agent:
                     eval_obs = torch.tensor(eval_obs, device=self.device)
                     expert_actions = torch.tensor(expert_actions, device=self.device)
                     all_q_vals = self.algorithm.policy_net(eval_obs)
-                    #TODO include back in when moving to other algorithms besides behavior cloning
-                    # might cause crazy evaluative behavior...
                     if self.algorithm.name != 'BehaviorCloning':
                         all_q_vals[~action_masks] = float('-inf')
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())
-                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}")
+                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}, Q-val={q_val:.3f}")
             
-        version_num = 0
-        save_filepath = self.outdir + 'weights' + f'-v{version_num}.pt'
+        save_filepath = self.outdir + 'weights.pt'
         self.save(save_filepath)
         train_metrics_filepath = self.outdir + 'train_metrics.pkl'
         with open(train_metrics_filepath, 'wb') as handle:

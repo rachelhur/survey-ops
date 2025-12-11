@@ -3,7 +3,7 @@ import gymnasium as gym
 import numpy as np
 import pandas as pd
 
-from survey_ops.utils.ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial
+from survey_ops.utils.ephemerides import get_source_ra_dec, equatorial_to_topographic, topographic_to_equatorial, HealpixGrid
 from survey_ops.utils.interpolate import interpolate_on_sphere
 
 #TODO
@@ -251,17 +251,20 @@ class OfflineEnv(BaseTelescope):
         """
         # instantiate static attributes
         self.dataset = dataset
+
         self.unique_radec, field_counts = np.unique([(ra, dec) for ra, dec in zip(dataset._df['ra'].values, dataset._df['dec'].values)], axis=0, return_counts=True)
-        self.field2radec = {i: (ra, dec) for i, (ra, dec) in enumerate(self.unique_radec)}
+        self.idx2radec = dataset.idx2radec
         self.timestamps = self.dataset.timestamps
-        self.obs_dim = dataset.obs_dim
         self.dones = dataset.dones
         self.reward_func = dataset.reward_func
         self.normalize_obs = dataset.normalize_obs
         self.norm = np.ones(shape=self.obs_dim)
+
         if self.normalize_obs:
             self.means = dataset.means
             self.stds = dataset.stds
+
+        self.obs_dim = dataset.obs_dim
         self.observation_space = gym.spaces.Box(
             low=-10, #np.min(dataset.obs),
             high=1e5,
