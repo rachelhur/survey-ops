@@ -62,7 +62,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         assert binning_method in ['uniform_grid', 'healpix']
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None)
         if binning_method == 'healpix':
-            self.hpGrid = HealpixGrid(nside=nside, hemisphere=False)
+            self.hpGrid = HealpixGrid(nside=nside)
             self.binid2radec = {hp_idx: np.array([lon, lat]) for hp_idx, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon / deg, self.hpGrid.lat / deg))}
         else:
             self.hpGrid = None

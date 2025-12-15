@@ -1,6 +1,5 @@
 import ephem
 from datetime import datetime
-import healpy as hp
 import numpy as np
 from survey_ops.utils import units
 
