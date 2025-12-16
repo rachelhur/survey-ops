@@ -3,8 +3,8 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler
 from collections import defaultdict
 
-from survey_ops.utils.units import *
-from survey_ops.utils.ephemerides import *
+from survey_ops.utils import units
+from survey_ops.utils import ephemerides
 import healpy as hp
 
 import pandas as pd
@@ -51,38 +51,38 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 nside=None,
                 num_bins_1d = None,
                 ):
+        assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
+        assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
+
         self.stateidx2name = {0: 'ra', 1: 'dec', 2: 'az', 3: 'el', 
                                 4: 'sun_ra', 5: 'sun_dec', 6: 'sun_az', 7: 'sun_el',
                                 8: 'moon_ra', 9: 'moon_dec', 10: 'moon_az', 11: 'moon_el',
                                 12: 'airmass', 13: 'ha', 14: 'T_night_fraction'
-                                }
-                            #  'zenith_ra': , 'zenith_dec': ,
+                                } #TODO remove current airmass?
+        #TODO add
+            # zenith_ra, zenith_dec
+            # bin_specific_info
+                # airmass for each sky bin --> hpGrid.get_airmass(time)
+                # ang_dist to moon --> hpGrid.get_source_angular_separations(source='moon', time)
+                # hpGrid.get_hour_angle(time)
+
         self.statename2idx = {v: k for k, v in self.stateidx2name.items()}
-        self.normalize_state = normalize_state
-        assert binning_method in ['uniform_grid', 'healpix']
-        assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None)
+        self.normalize_state = normalize_state # whether or not to normalize state
+
+        # Initialize healpix grid if binning_method is healpix
         if binning_method == 'healpix':
-            self.hpGrid = HealpixGrid(nside=nside)
-            self.binid2radec = {hp_idx: np.array([lon, lat]) for hp_idx, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon / deg, self.hpGrid.lat / deg))}
+            self.hpGrid = ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
+            # self.bin2radec = {hp_idx: np.array([lon, lat]) for hp_idx, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon / units.deg, self.hpGrid.lat / units.deg))}
         else:
             self.hpGrid = None
-
-        # self.fov = 2.2 # degrees
-        # self.arcsec_per_pix = .26 # https://noirlab.edu/science/programs/ctio/instruments/Dark-Energy-Camera/characteristics
-        # self.dither_offset = 100 #arcsec
 
         # Add timestamps column to df and sort df by timestamp (increasing)
         utc = pd.to_datetime(df['datetime'], utc=True)
         timestamps = (utc.astype('int64') // 10**9).values
         df['timestamp'] = timestamps
         df = df.sort_values(by='timestamp')
-
-        # Ensure all data are 32-bit precision before training
-        for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
-            cols = df.select_dtypes(include=[str_bit]).columns
-            df[cols] = df[cols].astype(np_bit)
         
-        # Sort dataframe into observation nights (noon to noon)
+        # Add column which indicates observing night (noon to noon)
         df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
         # Get observations for specific years, days, filters, etc.
@@ -94,29 +94,47 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df = df[df['night'].dt.day.isin(specific_days)]
         if specific_filters is not None:
             df = df[df['filter'].isin(specific_filters)]
-        # remove observations in 1970 - what are these?
+
+        # Remove observations in 1970 - what are these?
         df = df[df['night'].dt.year != 1970]
         assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
-        self._df = df # save for diagnostics - #TODO remove when all is tested
         
+        # Some fields are mis-labelled - add '(outlier)' to these object names so that they are treated as separate fields
+        df = self._process_mislabelled_objects(df)
+        
+        # Save df for diagnostics
+        self._df = df
+
+        # Ensure all data are 32-bit precision before training
+        for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
+            cols = df.select_dtypes(include=[str_bit]).columns
+            df[cols] = df[cols].astype(np_bit)
+
         # Group observations by observation night
-        groups = df.groupby('night')
-        self._groups = groups
-        self.unique_nights = groups.groups.keys()
-        self.n_nights = groups.ngroups
-        self.n_obs_per_night = groups.size() # nights have different numbers of observations
-        
+        obs_night_groups = df.groupby('night')
+        self._obs_night_groups = obs_night_groups
+        self.unique_nights = obs_night_groups.groups.keys()
+        self.n_nights = obs_night_groups.ngroups
+        self.n_obs_per_night = obs_night_groups.size() # nights have different numbers of observations
+
+        # Assign field index to each object name
+        self.field2idx = {field_name: i for i, field_name in enumerate(set(df.object))}
+
         # Set dataset-wide (across observation nights) attributes
         self.n_obs_tot = len(df)
         self.num_transitions = len(df) # size of dataset
         if binning_method == 'uniform_grid':
             self.num_actions = int(num_bins_1d**2)
         elif binning_method == 'healpix':
-            self.num_actions = hp.nside2npix(nside)
-            self.fieldradec2bin = {(lon, lat): self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
+            self.field2bin = {field_name: self.hpGrid.ang2idx(lon=ra * units.deg, lat=dec * units.deg) for field_name, (ra, dec) in zip(df.object, zip(df['ra'].values, df['dec'].values))}
+            # self.fieldradec2bin = {(lon, lat): self.hpGrid.ang2idx(lon=lon * units.deg, lat=lat * units.deg) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
         
+        # Add bin column to dataframe
+        df['bin'] = df['object'].map(self.field2bin)
+        self.num_actions = len(set(df['bin'].values))
+
         # Get transition variables
-        states, next_states = self._construct_states(groups)
+        states, next_states = self._construct_states(obs_night_groups)
         actions = self._construct_actions(next_states, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
         rewards = self._construct_rewards(df)
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
@@ -195,14 +213,14 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             
             # State vars that we need to calculate 
             for idx, time in zip(indices, timestamps):
-                sun_ra, sun_dec = get_source_ra_dec('sun', time=time)
-                moon_ra, moon_dec = get_source_ra_dec('moon', time=time)
+                sun_ra, sun_dec = ephemerides.get_source_ra_dec('sun', time=time)
+                moon_ra, moon_dec = ephemerides.get_source_ra_dec('moon', time=time)
                 all_states[idx, self.statename2idx['sun_ra']] = sun_ra
                 all_states[idx, self.statename2idx['sun_dec']] = sun_dec
                 all_states[idx, self.statename2idx['moon_ra']] = moon_ra
                 all_states[idx, self.statename2idx['moon_dec']] = moon_dec
-                all_states[idx, self.statename2idx['sun_az']], all_states[idx, self.statename2idx['sun_el']] = equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
-                all_states[idx, self.statename2idx['moon_az']], all_states[idx, self.statename2idx['moon_el']] = equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
+                all_states[idx, self.statename2idx['sun_az']], all_states[idx, self.statename2idx['sun_el']] = ephemerides.equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
+                all_states[idx, self.statename2idx['moon_az']], all_states[idx, self.statename2idx['moon_el']] = ephemerides.equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
                 if T_night == 0 and time - timestamps[0] == 0:
                     # if only one observation this night, set T_night_fraction to 0 and avoid division by 0
                     all_states[idx, self.statename2idx['T_night_fraction']] = 0.
@@ -219,8 +237,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return states, next_states
 
     def _construct_actions(self, next_states, bin_space='radec', binning_method='healpix', num_bins_1d=None):
-        assert bin_space in ['radec', 'azel']
-        assert binning_method in ['uniform_grid', 'healpix']
+        assert bin_space in ['radec', 'azel'], 'bin_space must be radec or azel'
+        assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
 
         if binning_method == 'uniform_grid' and bin_space == 'azel':
             az_idx = self.statename2idx['az']
@@ -251,25 +269,25 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         elif binning_method=='healpix' and bin_space=='radec':
             ra_idx = self.statename2idx['ra']
             dec_idx = self.statename2idx['dec']
-            indices = self.hpGrid.ang2idx(lon=next_states[:, ra_idx]*deg, lat=next_states[:, dec_idx]*deg)
+            indices = self.hpGrid.ang2idx(lon=next_states[:, ra_idx]*units.deg, lat=next_states[:, dec_idx]*units.deg)
             return indices
         else:
             raise NotImplementedError
     
     def _get_unique_fields_dict(self, df, radec_width=.05):
-        """Constructs uniform binning across RA/Dec, then decides that all observations within this width are observing the same field.
+        # """Constructs uniform binning across RA/Dec, then decides that all observations within this width are observing the same field.
 
-        Args
-        ----
-        radec_width (float): the bin width in degrees
-        """
-        radec_width = .05
-        ra_edges = np.arange(np.min(df['ra'].values), np.max(df['ra'].values), step=radec_width, dtype=np.float32)
-        dec_edges = np.arange(np.min(df['dec'].values), np.max(df['dec'].values), step=radec_width, dtype=np.float32)
+        # Args
+        # ----
+        # radec_width (float): the bin width in degrees
+        # """
+        # radec_width = .05
+        # ra_edges = np.arange(np.min(df['ra'].values), np.max(df['ra'].values), step=radec_width, dtype=np.float32)
+        # dec_edges = np.arange(np.min(df['dec'].values), np.max(df['dec'].values), step=radec_width, dtype=np.float32)
 
-        i_x = np.digitize(df['ra'].values, ra_edges).astype(np.int32) - 1
-        i_y = np.digitize(df['dec'].values, dec_edges).astype(np.int32) - 1
-        bin_ids = i_x + i_y * (num_bins_1d)
+        # i_x = np.digitize(df['ra'].values, ra_edges).astype(np.int32) - 1
+        # i_y = np.digitize(df['dec'].values, dec_edges).astype(np.int32) - 1
+        # bin_ids = i_x + i_y * (num_bins_1d)
         raise NotImplementedError
 
     def _construct_rewards(self, df):
@@ -283,6 +301,46 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # given timestamp, determine bins which are outside of observable range
         return np.ones((self.num_transitions, self.num_actions), dtype=bool)
 
+    def _process_mislabelled_objects(self, df):
+        """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
+
+        Args
+        ----
+        df (pd.DataFrame): The dataframe with object names and RA/Dec positions.
+
+        Returns
+        -------
+        df_relabelled (pd.DataFrame): The dataframe with relabelled objects.
+        """
+
+        object_radec_df = df[['object', 'ra', 'dec']]
+        object_radec_groups = object_radec_df.groupby('object')
+        df_relabelled = df.copy(deep=True)
+
+        outlier_indices = []
+        for obj_name, g in object_radec_groups:
+            # print(g.index)
+
+            cutoff_deg = 3
+            median_ra = g.ra.median()
+            delta_ra = g.ra - median_ra
+            delta_ra_shifted = np.remainder(delta_ra + 180, 360) - 180
+            mask_outlier_ra = np.abs(delta_ra_shifted) > cutoff_deg
+
+            median_dec = g.dec.median()
+            delta_dec = g.dec - median_dec
+            delta_dec_shifted = np.remainder(delta_dec + 180, 360) - 180
+            mask_outlier_dec = np.abs(delta_dec_shifted) > cutoff_deg
+
+            mask_outlier = mask_outlier_ra | mask_outlier_dec
+
+            if np.count_nonzero(mask_outlier) > 0:
+                indices = g.index[mask_outlier].values
+                outlier_indices.extend(indices)
+
+        df_relabelled.loc[outlier_indices, 'object'] = [f'{obj_name} (outlier)' for obj_name in df.loc[outlier_indices, 'object'].values]
+        return df_relabelled
+    
     def get_dataloader(self, batch_size, num_workers, pin_memory):
         loader = DataLoader(
             self,
