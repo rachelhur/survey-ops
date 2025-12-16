@@ -113,7 +113,7 @@ class BaseTelescope(gym.Env):
             return 1
         return self._reward_func(last_field, next_field)
 
-class TelescopeEnv_v0(BaseTelescope):
+class ToyEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with TelescopeDatasetv0.
 
@@ -127,7 +127,7 @@ class TelescopeEnv_v0(BaseTelescope):
     """
     def __init__(self, dataset):
         """
-        Initializes the TelescopeEnv_v0 with parameters from the dataset.
+        Initializes the ToyEnv with parameters from the dataset.
 
         Args
         ----

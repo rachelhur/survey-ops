@@ -113,6 +113,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.num_actions = int(num_bins_1d**2)
         elif binning_method == 'healpix':
             self.num_actions = hp.nside2npix(nside)
+            self.fieldradec2bin = {(lon, lat): self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
         
         # Get transition variables
         states, next_states = self._construct_states(groups)
@@ -135,8 +136,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Set dimension of observation
         self.obs_dim = self.states.shape[-1]
 
-        # Construct lookup table for scheduling
-        self.fieldradec2bin = {(lon, lat): self.hpGrid.ang2idx(lon=lon * deg, lat=lat * deg) for (lon, lat) in zip(df['ra'].values, df['dec'].values)}
         # Normalize states if specified
         if self.normalize_state:
             self.means = torch.mean(self.next_states, axis=0)
