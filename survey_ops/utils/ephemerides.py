@@ -2,7 +2,9 @@ import ephem
 from datetime import datetime
 import numpy as np
 from survey_ops.utils import units
-
+import healpy as hp
+import numpy as np
+from survey_ops.utils import units
 
 def blanco_observer(time=None):
     """
@@ -237,9 +239,6 @@ class HealpixGrid:
             Whether grid points (labeled as lon/lat) represent az/el (True) or ra/dec
             (False). If True, only pixels in the visible hemisphere (el > 0) are kept.
         """
-        import healpy as hp
-        import numpy as np
-        from survey_ops.utils import units
 
         # store initial arguments
         self.nside = nside
