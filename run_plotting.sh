@@ -1,0 +1,1 @@
+python /home/rachel/Projects/survey-ops/survey_ops/plotting.py -o my_test_schedule.gif -f /home/rachel/Projects/survey-ops/data/fields2radec.json -s /home/rachel/Projects/survey-ops/data/true_schedule.csv
