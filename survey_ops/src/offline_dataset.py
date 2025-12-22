@@ -310,7 +310,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # "States" require inserting rows of 0's before first observation of each night, and deleting last observation
         night_end_indices = df.groupby('night').tail(1).index - df.head(1).index
         pointing_features[night_end_indices[:-1]] = 0 # Replace last observation of each night with 0's, except last observation of entire self
-        pointing_features = pointing_features[:-1, :] # remove last observation of entire self
+        pointing_features = pointing_features[:-1, :] # remove last observation row
         zero_row = np.zeros_like(pointing_features[0]) # insert row of 0s in front of first observation
         pointing_features = np.vstack([zero_row, pointing_features])
  
