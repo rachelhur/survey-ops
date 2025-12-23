@@ -242,29 +242,33 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, dataset):
+    def __init__(self, train_dataset, test_dataset, init_timestamp=None, start_in_null=True):
         """
         Args
         ----
-            dataset: An object (assumed to be TelescopeDatasetv0) containing
+            dataset: An object (assumed to be OfflineDECamDataset instance) containing
                      static environment parameters and observation data.
         """
         # instantiate static attributes
         self.dataset = dataset
+        self.hpGrid = train_dataset.hpGrid
+        self.state_feature_names = train_dataset.state_feature_names
+        self.pointing_feature_names = train_dataset.pointing_feature_names
+        self.bin_feature_names = train_dataset.bin_feature_names
+        self.start_in_null = start_in_null
+        self.first_real_state = np.array([test_dataset._df[feat_name] for feat_name in self.pointing_feature_names])
 
-        self.unique_radec, field_counts = np.unique([(ra, dec) for ra, dec in zip(dataset._df['ra'].values, dataset._df['dec'].values)], axis=0, return_counts=True)
-        self.idx2radec = dataset.idx2radec
+        self.idx2radec = train_dataset.idx2radec
         self.timestamps = self.dataset.timestamps
-        self.dones = dataset.dones
-        self.reward_func = dataset.reward_func
-        self.normalize_obs = dataset.normalize_obs
+        self.dones = train_dataset.dones
+        self.reward_func = train_dataset.reward_func
+        self.normalize_obs = train_dataset.normalize_obs
         self.norm = np.ones(shape=self.obs_dim)
 
-        if self.normalize_obs:
-            self.means = dataset.means
-            self.stds = dataset.stds
+        if init_timestamp is None:
+            self._timestamp = dataset._df['timestamp'].head(1)
 
-        self.obs_dim = dataset.obs_dim
+        self.obs_dim = train_dataset.obs_dim
         self.observation_space = gym.spaces.Box(
             low=-10, #np.min(dataset.obs),
             high=1e5,
@@ -272,7 +276,7 @@ class OfflineEnv(BaseTelescope):
             dtype=np.float32,
         )
         # Define action space        
-        self.action_space = gym.spaces.Discrete(self.num_actions)
+        self.action_space = gym.spaces.Discrete(n=self.hpGrid.npix)
         super().__init__()
     
     # ------------------------------------------------------------ #
@@ -286,8 +290,10 @@ class OfflineEnv(BaseTelescope):
         The episode starts at the beginning of the observation window (index 0)
         and with the telescope pointing at the first target field.
         """
-        first_state = np.zeros(self.obs_dim, dtype=np.float32)
-        
+        if self.start_in_null:
+            self._state = np.zeros(self.obs_dim, dtype=np.float32)
+        else:
+            self._state = self.
         self._field_id = self.target_field_ids[0]
         self._action_mask = np.ones(self.nfields, dtype=bool)
         self._visited = [self.target_field_ids[0]]

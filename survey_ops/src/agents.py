@@ -52,7 +52,7 @@ class Agent:
         self.outdir = outdir
         
 
-    def fit(self, num_epochs, patience=None, dataset=None, batch_size=None, dataloader=None, eval_freq=100):
+    def fit(self, num_epochs, dataset=None, batch_size=None, dataloader=None, eval_freq=100, patience=10):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`
@@ -72,7 +72,7 @@ class Agent:
                 are sampled and accuracy is recorded.
 
         Saves:
-            - `<outdir>/weights-v0.pt`: Final model weights.
+            - `<outdir>/weights.pt`: Final model weights.
             - `<outdir>/train_metrics.pkl`: Dictionary containing:
                 - `loss_history`
                 - `q_history`
@@ -81,12 +81,14 @@ class Agent:
         # assert dataset is not None and dataloader is not None
         if dataloader is not None:
             assert batch_size is not None
-
+        
         train_metrics = {
             'loss_history': [],
             'q_history': [],
             'test_acc_history': [] 
         }
+
+        save_filepath = self.outdir + 'best_weights.pt'
 
         if dataloader is not None:
             # TODO for v0 only - remove when model is updated for release
@@ -98,6 +100,7 @@ class Agent:
             total_steps = int(num_epochs * dataset_size / batch_size)
             loader_iter = None  # not used for manual sampling
 
+        best_val_loss = 1e5
         for i_step in tqdm(range(total_steps)):
             if dataloader is not None:
                 try:
@@ -125,24 +128,24 @@ class Agent:
                     else:
                         # --- old method fallback ---
                         eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
-
+                    
                     # Test on a batch
                     eval_obs = torch.tensor(eval_obs, device=self.device)
                     expert_actions = torch.tensor(expert_actions, device=self.device)
                     all_q_vals = self.algorithm.policy_net(eval_obs)
                     if self.algorithm.name != 'BehaviorCloning':
                         all_q_vals[~action_masks] = float('-inf')
+                    eval_loss = self.algorithm.loss_fxn(all_q_vals, expert_actions)
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())
-                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {loss:.4f}, Q-val={q_val:.3f}")
-            
-        save_filepath = self.outdir + 'weights.pt'
-        self.save(save_filepath)
+                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={all_q_vals.mean().item():.3f}")
+                    if eval_loss < best_val_loss:
+                        best_val_loss = eval_loss
+                        self.save(save_filepath)
         train_metrics_filepath = self.outdir + 'train_metrics.pkl'
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
-
     
     def evaluate(self, env, num_episodes):
         """Evaluates the agent in an environment for multiple episodes.

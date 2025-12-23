@@ -183,7 +183,23 @@ class BehaviorCloning(AlgorithmBase):
         loss.backward()
         self.optimizer.step()
 
-        return loss.item(), 0.0
+        return loss.item(), action_logits.mean().item()
+    
+    # def test_step(self, batch):
+    #     obs, expert_actions, rewards, next_obs, dones, action_masks = batch
+
+    #     with torch.no_grad:      
+    #         # convert to tensors
+    #         if not torch.is_tensor(obs):
+    #             obs = torch.tensor(np.array(obs), dtype=torch.float32)
+    #             expert_actions = torch.tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
+    #         obs = obs.to(device=self.device, dtype=torch.float32)
+    #         expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
+    #         action_logits = self.policy_net(obs)
+            
+    #         loss = self.loss_fxn(action_logits, expert_actions)
+
+    #     return loss.item(), action_logits.mean().item()
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
