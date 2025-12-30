@@ -1,6 +1,7 @@
 import ephem
 from datetime import datetime
 import numpy as np
+import healpy as hp
 from survey_ops.utils import units
 
 
@@ -104,10 +105,19 @@ def topographic_to_equatorial(az, el, time=None, observer=None):
     observer = observer if observer is not None else blanco_observer(time=time)
 
     # compute topographic position for the observer
-    if np.iterable(az):
-        return np.array([observer.radec_of(a, e) for a, e in zip(az, el)]).T
-    else:
+    if not np.iterable(az):
         return observer.radec_of(az, el)
+
+    # compute Nd arrays by iterating through flattened 1d arrays
+    else:
+        shape = np.asarray(az).shape
+        ra, dec = np.array(
+            [
+                observer.radec_of(a, e)
+                for a, e in zip(np.asarray(az).flatten(), np.asarray(el).flatten())
+            ]
+        ).T
+        return ra.reshape(shape), dec.reshape(shape)
 
 
 def galactic_to_equatorial(l, b):
@@ -237,9 +247,6 @@ class HealpixGrid:
             Whether grid points (labeled as lon/lat) represent az/el (True) or ra/dec
             (False). If True, only pixels in the visible hemisphere (el > 0) are kept.
         """
-        import healpy as hp
-        import numpy as np
-        from survey_ops.utils import units
 
         # store initial arguments
         self.nside = nside
@@ -296,6 +303,50 @@ class HealpixGrid:
             return np.array([self.idx_lookup.get(i, None) for i in heal_idx])
         else:
             return self.idx_lookup.get(heal_idx, None)
+
+    def get_pixel_boundaries(self, idx=None, step=1):
+        """
+        For each pixel stored in the grid, computes the pixel boundaries of the pixel in
+        the grid's native lon/lat coordinates (az/el if is_azel is True, else RA/Dec).
+
+        Arguments
+        ---------
+        idx : int or list-like of ints [None]
+            The pixel indices to get the boundaries for. Default returns all pixels.
+        step : int [1]
+            Number of elements for each side of the pixel. Default 1 returns only the
+            corners of the pixels
+
+        Returns
+        -------
+        boundaries_lon, boundaries_lat : 2d np.array
+            Arrays of size n_pixels by 4*step: the lon/lat coordinates of the pixel
+            boundaries.
+        """
+
+        # format requested index choice
+        idx = self.heal_idx if idx is None else np.atleast_1d(idx)
+
+        # containers for outputs
+        vertices_ra = []
+        vertices_dec = []
+
+        # get boundaries for pixels, specified as xyz points on unit sphere
+        # shape: n_pixels x 3 (xyz) x 4*step (points along boundary)
+        boundaries = hp.boundaries(self.nside, idx, step)
+
+        # convert xyz vector positions to lon, lat vector positions
+        # shape: 2 (lon/lat) x n_pixels*4*nstep
+        boundaries = hp.vec2ang(np.transpose(boundaries, axes=(0, 2, 1)), lonlat=True)
+
+        # resize boundaries into lon/lat arrays of expected format
+        boundaries_lon, boundaries_lat = np.reshape(boundaries, (2, len(idx), 4 * step))
+
+        # apply units
+        boundaries_lon *= units.deg
+        boundaries_lat *= units.deg
+
+        return boundaries_lon, boundaries_lat
 
     def get_angular_separations(self, lon, lat):
         """
