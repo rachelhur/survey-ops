@@ -166,15 +166,19 @@ class BehaviorCloning(AlgorithmBase):
         """
         Train the policy to mimic expert actions from offline data
         """
-        obs, expert_actions, rewards, next_obs, dones, action_masks = batch
+        state, expert_actions, rewards, next_state, dones, action_masks = batch
         
-        # convert to tensors
-        if not torch.is_tensor(obs):
-            obs = torch.tensor(np.array(obs), dtype=torch.float32)
-            expert_actions = torch.tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
-        obs = obs.to(device=self.device, dtype=torch.float32)
-        expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
-        action_logits = self.policy_net(obs)
+        # convert to tensors and appropriate dtypes
+        if not torch.is_tensor(state):
+            state = torch.as_tensor(state, dtype=torch.float32)
+        state = state.to(self.device)
+
+        if not torch.is_tensor(expert_actions):
+            expert_actions = torch.as_tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
+        else:
+            expert_actions = expert_actions.long() # needs to be long for .gather()
+        expert_actions = expert_actions.to(device=self.device)
+        action_logits = self.policy_net(state)
         
         loss = self.loss_fxn(action_logits, expert_actions)
 

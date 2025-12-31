@@ -54,7 +54,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         # Set up normalization decisions
         self.do_z_score_norm = do_z_score_norm
-        self.z_score_feature_names = ['dec', 'el', 'airmass', 'time_fraction_since_start', 'time_seconds_since_start']
+        self.z_score_feature_names = ['dec', 'el', 'airmass']
         self.do_cyclical_norm = do_cyclical_norm
         if self.do_cyclical_norm:
             self.cyclical_feature_names = ['ra', 'az', 'ha']
@@ -69,6 +69,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             bin_feature_names = bin_feature_names.flatten().tolist()
         else:
             bin_feature_names = []
+        self.base_pointing_feature_names = pointing_feature_names
+        self.base_bin_feature_names = bin_feature_names
+        self.base_feature_names = pointing_feature_names + bin_feature_names
 
         # Replace cyclical features with their cyclical transforms/normalizations if on  
         if self.do_cyclical_norm:
@@ -97,6 +100,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         if not self.hpGrid.is_azel:
             self.bin2radec = {i: (lon, lat) for i, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon, self.hpGrid.lat))}
             self.bin2fieldradecs = {bin_id: g.loc[:, ['ra', 'dec']].values for bin_id, g in df.groupby('bin')}
+            self.bin2fieldname = {bin_id: g.loc[:, ['object']].values for bin_id, g in df.groupby('bin')}
             self.fieldname2bin = {name: bin for name, bin in zip(df['object'], df['bin'])}
             self.field2meanradec = {obj_name: g.loc[:, ['ra', 'dec']].mean(axis=0).values for obj_name, g in df.groupby('object')}
 
@@ -168,18 +172,18 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         #     np.array('airmass' in feat_name for feat_name in self.state_feature_names),
         #     dtype=torch.bool
         #     )
-        z_score_mask = ~cyclic_mask # &~
+        z_score_mask = ~cyclic_mask # &a~
 
         # z-score normalization for any non-periodic features
-        self.means = torch.mean(self.next_states, axis=0)
-        self.stds = torch.std(self.next_states, axis=0)
-        self.next_states[:, z_score_mask] = ((self.next_states - self.means) / self.stds)[:, z_score_mask]
+        self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
+        self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
+        self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
         self.next_states[torch.isnan(self.next_states)] = 10
 
         mask_null = self.states == 0
         new_states = self.states.clone()
 
-        new_states[:, z_score_mask] = ((new_states - self.means) / self.stds)[:, z_score_mask]
+        new_states[:, z_score_mask] = ((new_states[:, z_score_mask] - self.means) / self.stds)
         new_states[mask_null] = 0.
         new_states[torch.isnan(new_states)] = 10
         self.states = new_states
@@ -256,7 +260,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         for idx, time in zip(df.index, timestamps):
             sun_ra, sun_dec = ephemerides.get_source_ra_dec('sun', time=time)
             df.loc[idx, ['sun_ra', 'sun_dec']] = sun_ra, sun_dec
-            df.loc[idx, ['sun_az', 'sun_el']] = ephemerides.equatorial_to_topographic(ra=sun_ra, dec=sun_dec)
+            df.loc[idx, ['sun_az', 'sun_el']] = ephemerides.equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
 
             moon_ra, moon_dec = ephemerides.get_source_ra_dec('moon', time=time)
             df.loc[idx, ['moon_ra', 'moon_dec']] = moon_ra, moon_dec

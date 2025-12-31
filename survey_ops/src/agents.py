@@ -130,11 +130,13 @@ class Agent:
                         eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
                     
                     # Test on a batch
-                    eval_obs = torch.tensor(eval_obs, device=self.device)
-                    expert_actions = torch.tensor(expert_actions, device=self.device)
+                    eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
+                    expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
+                    
                     all_q_vals = self.algorithm.policy_net(eval_obs)
                     if self.algorithm.name != 'BehaviorCloning':
                         all_q_vals[~action_masks] = float('-inf')
+                    
                     eval_loss = self.algorithm.loss_fxn(all_q_vals, expert_actions)
                     predicted_actions = all_q_vals.argmax(dim=1)
                     accuracy = (predicted_actions == expert_actions).float().mean()
