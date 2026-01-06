@@ -463,9 +463,9 @@ class OfflineEnv(BaseTelescope):
         new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
 
         new_features['sun_ra'], new_features['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=self._timestamp)
-        new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'])
+        new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'], time=self._timestamp)
         new_features['moon_ra'], new_features['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=self._timestamp)
-        new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'])
+        new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'], time=self._timestamp)
 
         if self._night_final_timestamp == self._night_first_timestamp:
             new_features['time_fraction_since_start'] = 0
