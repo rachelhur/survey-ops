@@ -176,6 +176,9 @@ class Agent:
         # evaluation metrics
         observations = {}
         rewards = {}
+        timestamps = {}
+        field_ids = {}
+        bin_nums = {}
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
@@ -187,21 +190,29 @@ class Agent:
             truncated = False
             obs_list = [obs]
             rewards_list = [0]
+            timestamps_list = [env.unwrapped._timestamp]
+            field_ids_list = [env.unwrapped._field_id]
+            bin_nums_list = [env.unwrapped._bin_num]
             i = 0
 
             while not (terminated or truncated):
                 with torch.no_grad():
-                    obs = obs / env.unwrapped.norm
                     action_mask = info.get('action_mask', None)
                     action = self.act(obs, action_mask, epsilon=None)  # greedy
                     obs, reward, terminated, truncated, info = env.step(action)
                     obs_list.append(obs)
                     rewards_list.append(reward)
                     episode_reward += reward
+                    timestamps_list.append(env.unwrapped._timestamp)
+                    field_ids_list.append(env.unwrapped._field_id)
+                    bin_nums_list.append(env.unwrapped._bin_num)
                     i += 1
             print(f'terminated at {i}')
             observations.update({f'ep-{episode}': np.array(obs_list)})
             rewards.update({f'ep-{episode}': np.array(rewards_list)})
+            timestamps.update({f'ep-{episode}': np.array(timestamps_list)})
+            field_ids.update({f'ep-{episode}': np.array(field_ids_list)})
+            bin_nums.update({f'ep-{episode}': np.array(bin_nums_list)})
             episode_rewards.append(episode_reward)
 
         eval_metrics.update({
@@ -211,7 +222,10 @@ class Agent:
             'max_reward': np.max(episode_rewards),
             'episode_rewards': episode_rewards,
             'observations': observations,
-            'rewards': rewards
+            'rewards': rewards,
+            'timestamps': timestamps,
+            'field_id': field_ids,
+            'bin': bin_nums
         })
 
         with open(self.outdir + 'eval_metrics.pkl', 'wb') as handle:

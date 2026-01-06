@@ -9,6 +9,14 @@ import healpy as hp
 
 import pandas as pd
 import json
+import os
+
+import astropy
+
+def get_lst(timestamp):
+    t = astropy.time.Time(timestamp, format='unix', scale='utc')
+    lst = t.sidereal_time('apparent', longitude=-1.2358069931456779)
+    return lst.to(astropy.units.rad).value
 
 def reward_func_v0():
     raise NotImplementedError
@@ -36,6 +44,29 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
+        
+        bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
+        field2radec_filepath = f'../data/field2radec.json'
+        bin2radec_filepath = f'../data/nside{nside}_bin2radec.json'
+        field2name_filepath = f'../data/field2name.json'
+        field2nvisits_filepath = f'../data/field2nvisits.json'
+        
+        assert os.path.exists(bin2fields_in_bin_filepath) and os.path.exists(field2radec_filepath) and os.path.exists(bin2radec_filepath), f"bin and field mappings with nside {nside} do not exist in ../data. Check directory"
+        
+        with open(bin2fields_in_bin_filepath, 'r') as f:
+            self.bin2fields_in_bin = json.load(f)
+        with open(field2radec_filepath, 'r') as f:
+            self.field2radec = json.load(f)
+        with open(bin2radec_filepath, 'r') as f:
+            self.bin2radec = json.load(f)
+        with open(field2name_filepath, 'r') as f:
+            self.field2name = json.load(f)
+        with open(field2nvisits_filepath, 'r') as f:
+            self.field2nvisits = json.load(f)
+
+        self.bin2fields_in_bin = {int(k): v for k, v in self.bin2fields_in_bin.items()}
+        self.field2radec = {int(k): v for k, v in self.field2radec.items()}
+        self.bin2radec = {int(k): v for k, v in self.bin2radec.items()}
 
         # Any experiment will likely have at least these state features
         if include_default_features:
@@ -96,13 +127,11 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.num_actions = self.hpGrid.npix
             
         # # Save mappings
-        self.fieldname2idx = {field_name: i for i, field_name in enumerate(set(df.object))}
+        # self.fieldname2idx = {field_name: i for i, field_name in enumerate(set(df.object))}
         if not self.hpGrid.is_azel:
-            self.bin2radec = {i: (lon, lat) for i, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon, self.hpGrid.lat))}
             self.bin2fieldradecs = {bin_id: g.loc[:, ['ra', 'dec']].values for bin_id, g in df.groupby('bin')}
             self.bin2fieldname = {bin_id: g.loc[:, ['object']].values for bin_id, g in df.groupby('bin')}
             self.fieldname2bin = {name: bin for name, bin in zip(df['object'], df['bin'])}
-            self.field2meanradec = {obj_name: g.loc[:, ['ra', 'dec']].mean(axis=0).values for obj_name, g in df.groupby('object')}
 
         # Save night dates, total number of nights in dataset, and number of obs per night
         groups_by_night = df.groupby('night')
@@ -164,15 +193,18 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _do_noncyclic_normalizations(self):
         """Performs z-score normalization on any non-periodic features"""
         # mask non-zscore features
-        cyclic_mask = torch.tensor(
-            np.array([any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names) for feat_name in self.state_feature_names]),
-            dtype=torch.bool
-            )
+        # cyclic_mask = torch.tensor(
+        #     np.array([any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names) for feat_name in self.state_feature_names]),
+        #     dtype=torch.bool
+        #     )
         # airmass_mask = torch.tensor(
         #     np.array('airmass' in feat_name for feat_name in self.state_feature_names),
         #     dtype=torch.bool
         #     )
-        z_score_mask = ~cyclic_mask # &a~
+        z_score_mask = np.array([
+            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+            for feat_name in self.state_feature_names
+        ])
 
         # z-score normalization for any non-periodic features
         self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
@@ -286,7 +318,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 continue
             else:
                 if feat_name == 'el':
-                    df['el'] = np.pi/2 - df['zd']
+                    df['el'] = np.pi/2 - df['zd'].values
                 else:
                     raise NotImplementedError(f'{feat_name} not yet implemented')
 
@@ -302,8 +334,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 lon = df['ra']
                 lat = df['dec']
                 df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
-                
-        
+
+        df['field_id'] = df['object'].map({v: k for k, v in self.field2name.items()})
+
         # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
             cols = df.select_dtypes(include=[str_bit]).columns
@@ -327,10 +360,15 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         
         # "States" require inserting rows of 0's before first observation of each night, and deleting last observation
         night_end_indices = df.groupby('night').tail(1).index - df.head(1).index
-        pointing_features[night_end_indices[:-1]] = 0 # Replace last observation of each night with 0's, except last observation of entire self
+
+        # Calculate zenith states
+        zenith_timestamps = df.groupby('night').head(1).timestamp - 10
+
+        zenith_states = self._get_zenith_states(timestamps=zenith_timestamps)
+        pointing_features[night_end_indices[:-1]] = zenith_states[:-1] # Replace last observation of each night with 0's, except last observation of entire self
         pointing_features = pointing_features[:-1, :] # remove last observation row
-        zero_row = np.zeros_like(pointing_features[0]) # insert row of 0s in front of first observation
-        pointing_features = np.vstack([zero_row, pointing_features])
+        # zero_row = np.zeros_like(pointing_features[0]) # insert row of 0s in front of first observation
+        pointing_features = np.vstack([zenith_states[-1], pointing_features])
  
         return pointing_features, next_pointing_features
         
@@ -389,10 +427,11 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         
         # "States" require inserting rows of 0's before first observation of each night, and deleting last observation
         night_end_indices = bin_df.groupby('night').tail(1).index - bin_df.head(1).index
+
         bin_features[night_end_indices[:-1]] = 0 # Replace last observation of each night with 0's, except last observation of entire self
         bin_features = bin_features[:-1, :] # remove last observation of entire self
-        zero_row = np.zeros_like(bin_features[0]) # insert row of 0s in front of first observation
-        bin_features = np.vstack([zero_row, bin_features])
+        zenith_row = np.zeros_like(bin_features[0]) # insert row of 0s in front of first observation
+        bin_features = np.vstack([zenith_row, bin_features])
 
         return bin_features, next_bin_features
     
@@ -456,6 +495,36 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _construct_action_masks(self, timestamps=None):
         # given timestamp, determine bins which are outside of observable range
         return np.ones((self.num_transitions, self.num_actions), dtype=bool)
+
+    def _get_zenith_states(self, timestamps):
+        LSTs = get_lst(timestamps)
+        blanco_lat = -0.5265599205997796 # rad
+
+        zenith_rows = []
+        for i_row, time in enumerate(timestamps):
+            row_dict = {}
+            row_dict['ra'] = LSTs[i_row]
+            row_dict['sun_ra'], row_dict['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=time)
+            row_dict['moon_ra'], row_dict['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=time)
+            row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'])
+            row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'])
+            row_dict['time_fraction_since_start'] = 0.
+            zenith_rows.append(row_dict)
+
+        zenith_df = pd.DataFrame(zenith_rows)
+        zenith_df['dec'] = blanco_lat
+        zenith_df['az'] = 0
+        zenith_df['el'] = np.pi/2
+        zenith_df['airmass'] = 1
+        zenith_df['ha'] = 0
+            
+        for feat_name in self.base_pointing_feature_names:
+            if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
+                zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
+                zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
+
+        zenith_pointing_features = zenith_df[self.pointing_feature_names].to_numpy()
+        return zenith_pointing_features
     
     def get_dataloader(self, batch_size, num_workers, pin_memory):
         loader = DataLoader(

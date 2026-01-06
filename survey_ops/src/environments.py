@@ -8,7 +8,6 @@ from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
 
-#TODO
 
 class BaseTelescope(gym.Env):
     """
@@ -243,7 +242,7 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, train_dataset, test_dataset, max_nights, field_choice_method='interp', exp_time=90):
+    def __init__(self, train_dataset, test_dataset, max_nights=None, field_choice_method='interp', exp_time=90., slew_time=30.):
         """
         Args
         ----
@@ -254,20 +253,24 @@ class OfflineEnv(BaseTelescope):
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.exp_time = exp_time
+        self.slew_time = slew_time
+        self.time_between_obs = exp_time + slew_time
         self.time_dependent_feature_substrs = ['az', 'el', 'ha', 'time_fraction_since_start']
         self.cyclical_feature_names = train_dataset.cyclical_feature_names
         self.z_score_feature_names = train_dataset.z_score_feature_names
         self.field_choice_method = field_choice_method
 
-        obj_names, counts = np.unique(train_dataset._df['object'], return_counts=True)
-        self.fieldname2nvisits = {obj_name: count for obj_name, count in zip(obj_names, counts)}
-        self.fieldname2idx = train_dataset.fieldname2idx
-        self.fieldidx2name = {v: k for k, v in train_dataset.fieldname2idx.items()}
-        self.fieldname2radec = train_dataset.field2meanradec
-        self.fieldname2bin = train_dataset.fieldname2bin
-        self.bin2fieldname = train_dataset.bin2fieldname
+        # self.fieldname2idx = train_dataset.fieldname2idx
+        # self.fieldidx2name = {v: k for k, v in train_dataset.fieldname2idx.items()}
+        # self.fieldname2bin = train_dataset.fieldname2bin
+        # self.bin2fieldname = train_dataset.bin2fieldname
         self.bin2fieldradecs = train_dataset.bin2fieldradecs
-        self.nfields = len(self.fieldname2idx)
+        # The following is saved in ../data/*.json files
+        self.bin2fields_in_bin = {int(k): v for k, v in train_dataset.bin2fields_in_bin.items()}
+        self.field2radec = {int(k): v for k, v in train_dataset.field2radec.items()}
+        self.bin2radec = {int(k): v for k, v in train_dataset.bin2radec.items()}
+        self.field2nvisits = {int(fid): int(count) for fid, count in train_dataset.field2nvisits.items()}
+        self.nfields = len(self.field2nvisits)
         self.nbins = len(train_dataset.bin2radec)
 
         self.hpGrid = train_dataset.hpGrid
@@ -279,10 +282,13 @@ class OfflineEnv(BaseTelescope):
         self.pointing_feature_names = train_dataset.pointing_feature_names
         self.bin_feature_names = train_dataset.bin_feature_names
 
+        self.zscore_means = train_dataset.means.detach().numpy()
+        self.zscore_stds = train_dataset.stds.detach().numpy()
+
         self.pd_nightgroup = test_dataset._df.groupby('night')
         self.max_nights = max_nights
         if max_nights is None:
-            self.max_nights = len(self.pd_nightgroup)
+            self.max_nights = self.pd_nightgroup.ngroups
         if hasattr(train_dataset, 'reward_func'):
             self._reward_func = train_dataset.reward_func
         else:
@@ -293,13 +299,15 @@ class OfflineEnv(BaseTelescope):
 
         self.obs_dim = train_dataset.obs_dim
         self.observation_space = gym.spaces.Box(
-            low=-10, #np.min(dataset.obs),
-            high=1e5,
+            low=-100, #np.min(dataset.obs),
+            high=1e8,
             shape=(self.obs_dim,),
             dtype=np.float32,
         )
         # Define action space        
         self.action_space = gym.spaces.Discrete(n=self.hpGrid.npix)
+
+        self._state = np.zeros(self.obs_dim, dtype=np.float32)
         super().__init__()
 
     def reset(self, seed=None, options=None):
@@ -318,14 +326,13 @@ class OfflineEnv(BaseTelescope):
         super().reset(seed=seed)
 
         # initialize into a non-state.
-        # this allows first field choice to be learned
-        self._night_idx = -10
-        self._visited = []
+        # self._night_idx = -1
+        # self._visited = []
 
-        obs = self._get_state()
-        info = self._get_info()
         self._init_to_first_state()
-        return obs, info
+        state = self._get_state()
+        info = self._get_info()
+        return state, info
 
     def step(self, action: int):
         """Execute one timestep within the environment.
@@ -353,21 +360,21 @@ class OfflineEnv(BaseTelescope):
         reward = 0
         reward += self._get_rewards(last_field_id, self._field_id)
 
+        # -------------------- Start new night if last transition -----------------------#
+
+        is_new_night = self._state[-1] >= 1.0 # time_fraction_since_start > = 1.0
+        if is_new_night:
+            self._start_new_night()
+        
         # -------------------- Terminate condition -----------------------#
         truncated = False
         terminated = self._get_termination_status()
 
-        # -------------------- Start new night if last transition -----------------------#
-        
-        is_new_night = self._timestamp >= self.pd_nightgroup.tail(1)['timestamp'].iloc[self._night_idx]
-        if is_new_night:
-            self._start_new_night()
-
         # get obs and info
-        next_obs = self._get_state()
+        next_state = self._get_state()
         info = self._get_info()
 
-        return next_obs, reward, terminated, truncated, info
+        return next_state, reward, terminated, truncated, info
 
     # ------------------------------------------------------------ #
     # -------------Convenience functions-------------------------- #
@@ -388,16 +395,16 @@ class OfflineEnv(BaseTelescope):
             self._state = options['init_state']
             self._timestamp = options['init_timestamp']
 
-            field_name = options['field_name']
-            field_id = self.fieldname2idx[field_name]
+            field_id = options['field_id']
+            # field_id = self.fieldname2idx[field_name]
             self._field_id = field_id
-            self._bin_num = self.fieldname2bin[field_name]
+            # self._bin_num = self.fieldname2bin[field_name]
             self._visited = [field_id]
             raise NotImplementedError
         
-        self._action_mask = np.ones(self.nbins, dtype=bool)
-        valid_action_mask = np.array(list(self.bin2fieldradecs.keys()))
-        self._action_mask[~valid_action_mask] = False
+        self._action_mask = np.zeros(self.nbins, dtype=bool)
+        valid_bins = np.array(list(self.bin2radec.keys()))
+        self._action_mask[valid_bins] = True
         self._update_action_mask(self._bin_num)
     
     def _start_new_night(self):
@@ -408,11 +415,11 @@ class OfflineEnv(BaseTelescope):
         first_row_in_night = self.pd_nightgroup.head(1).iloc[self._night_idx]
         self._night_final_timestamp = self.pd_nightgroup.tail(1).iloc[self._night_idx]['timestamp']
         self._night_first_timestamp = first_row_in_night['timestamp']
-        field_name = first_row_in_night['object']
-        self._field_id = self.fieldname2idx[field_name]
-        self._bin_num = self.fieldname2bin[field_name]
+        self._field_id = first_row_in_night['field_id']
+        self._bin_num = first_row_in_night['bin']
         self._visited.append(self._field_id)
         self._timestamp = first_row_in_night['timestamp']
+        
         self._state = [first_row_in_night[feat_name] for feat_name in self.state_feature_names]
         self._update_action_mask(self._bin_num)
 
@@ -427,10 +434,8 @@ class OfflineEnv(BaseTelescope):
             action (int): The field ID to check and potentially mask.
         """
         # If any fields in bin are not fully visited, do not update action mask
-        for field_name in self.bin2fieldname[action]:
-            field_name = field_name[0]
-            field_id = self.fieldname2idx[field_name]
-            max_nvisits = self.fieldname2nvisits[field_name]
+        for field_id in self.bin2fields_in_bin[action]:
+            max_nvisits = self.field2nvisits[field_id]
             if self._visited.count(field_id) < max_nvisits:
                 return
         self._action_mask[action] = False
@@ -443,17 +448,19 @@ class OfflineEnv(BaseTelescope):
         ----
             action (int): The chosen field ID to observe next.
         """
-        self._timestamp += self.exp_time
+        self._timestamp += self.time_between_obs
         self._bin_num = action
-        field_name, field_id = self._choose_field_in_bin(bin_num=action)
+        field_id = self._choose_field_in_bin(bin_num=action)
         self._field_id = field_id
         self._visited.append(field_id)
 
         new_features = {}
-        new_features['ra'], new_features['dec'] = self.fieldname2radec[field_name]
+        new_features['ra'], new_features['dec'] = self.field2radec[field_id]
         new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
         new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
-        new_features['airmass'] = 1 / np.cos(90 * units.deg - new_features['el'])
+        
+        cos_zenith = np.cos(90 * units.deg - new_features['el'])
+        new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
 
         new_features['sun_ra'], new_features['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=self._timestamp)
         new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'])
@@ -469,11 +476,8 @@ class OfflineEnv(BaseTelescope):
             if any(string in feat_name and 'bin' not in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
                 new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
                 new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
-        new_state = []
-        for feat_name in self.pointing_feature_names:
-            new_state.append(new_features[feat_name])
-        
-        self._state = new_state
+
+        self._state = np.array([new_features.get(feat, 0.0) for feat in self.state_feature_names], dtype=np.float32)
         self._update_action_mask(action)
         
     def _get_state(self):
@@ -487,9 +491,12 @@ class OfflineEnv(BaseTelescope):
             np.ndarray: The observation vector, potentially normalized.
         """
 
-        state = np.array(self._state, dtype=np.float32)
-        # obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
-        return state
+        state_copy = np.array(self._state, dtype=np.float32).copy()
+        # state_norm = state_copy
+        state_norm = self._do_noncyclic_normalizations(state=state_copy)
+        self._state = state_norm.copy()
+
+        return state_norm
 
     def _get_info(self):
         """
@@ -514,22 +521,36 @@ class OfflineEnv(BaseTelescope):
         """
         terminated = self._night_idx >= self.max_nights
         return terminated
-    
-    def _normalize_state(self):
-        raise NotImplementedError
 
+    def _do_noncyclic_normalizations(self, state):
+        """Performs z-score normalization on any non-periodic features"""
+        # mask non-zscore features
+        # cyclic_mask = np.array([any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names) for feat_name in self.state_feature_names])
+        # z_score_mask = ~cyclic_mask
+        z_score_mask = np.array([
+            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+            for feat_name in self.state_feature_names
+        ])
+
+        # z-score normalization for any non-periodic features
+        state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
+        state[np.isnan(state)] = 10
+
+        return state
+    
     def _choose_field_in_bin(self, bin_num):
-        radecs = self.bin2fieldradecs[bin_num]
-        field_names = self.bin2fieldname[bin_num]
-        az, el = ephemerides.equatorial_to_topographic(ra=radecs[:, 0], dec=radecs[:, 1], time=self._timestamp)
-        if bin_num not in self.bin2fieldradecs:
+        field_ids_in_bin = self.bin2fields_in_bin[bin_num]
+        # radecs = self.bin2fields_in_bin[bin_num]
+        # az, el = ephemerides.equatorial_to_topographic(ra=radecs[:, 0], dec=radecs[:, 1], time=self._timestamp)
+        
+        if bin_num not in self.bin2fields_in_bin:
             return None, None
         if self.field_choice_method == 'interp':
             # interpolate_on_sphere(az, el, az_data, el_data, values)
             raise NotImplementedError
         elif self.field_choice_method == 'random':
-            field_name = random.choice(field_names)[0]
-            field_id = self.fieldname2idx[field_name]
-            return field_name, field_id
+            field_id = random.choice(field_ids_in_bin)
+            # For now, only choose fields that are in test data
+            return field_id
 
 
