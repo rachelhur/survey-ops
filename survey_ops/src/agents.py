@@ -89,6 +89,7 @@ class Agent:
         }
 
         save_filepath = self.outdir + 'best_weights.pt'
+        train_metrics_filepath = self.outdir + 'train_metrics.pkl'
 
         if dataloader is not None:
             # TODO for v0 only - remove when model is updated for release
@@ -145,7 +146,8 @@ class Agent:
                     if eval_loss < best_val_loss:
                         best_val_loss = eval_loss
                         self.save(save_filepath)
-        train_metrics_filepath = self.outdir + 'train_metrics.pkl'
+                        with open(train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(train_metrics, handle)
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
     
@@ -263,15 +265,3 @@ class Agent:
             filepath (str): Path to previously saved model weights.
         """
         self.algorithm.load(filepath)
-
-    # def get_next_available_version_filename(base_filename):
-    #     """
-    #     Finds the next available versioned filename (e.g., file_v1.txt, file_v2.txt).
-    #     """
-    #     name, ext = os.path.splitext(base_filename)
-    #     version = 0
-    #     while True:
-    #         versioned_filename = f"{name}_v{version}{ext}"
-    #         if not os.path.exists(versioned_filename):
-    #             return versioned_filename
-    #         version += 1

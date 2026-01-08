@@ -14,4 +14,4 @@ result_dir="v2f-environment-testing"
 # python $current_dir/plotting.py -o $current_dir/results/v2f-environment-testing/eval_field_schedule.gif -f $current_dir/data/field2radec.json -s $current_dir/results/v2f-environment-testing/eval_schedule.csv
 # plot bins:
 echo "Creating bin schedule gif"
-python "$current_dir/survey_ops/plotting.py" -f "$current_dir/data/nside32_bin2radec.json" -o "$current_dir/results/$result_dir/bin_schedule.gif" -b "$current_dir/results/$result_dir/bin_schedule.csv" -n 32
+python "$current_dir/survey_ops/plotting.py" -f "$current_dir/data/nside16_bin2radec.json" -o "$current_dir/results/$result_dir/bin_schedule.gif" -b "$current_dir/results/$result_dir/bin_schedule.csv" -n 16
