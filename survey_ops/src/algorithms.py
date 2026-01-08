@@ -1,9 +1,11 @@
 
+import random
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from survey_ops.src.neural_nets import DQN
+from survey_ops.utils.interpolate import interpolate_on_sphere
 
 class AlgorithmBase:
     def __init__(self):
@@ -217,6 +219,7 @@ class BehaviorCloning(AlgorithmBase):
             action_logits[~mask] = float('-inf')
             action = torch.argmax(action_logits, dim=1)
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
+
 
     # def predict(self, state):
     #     """

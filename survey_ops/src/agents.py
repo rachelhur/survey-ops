@@ -1,3 +1,4 @@
+from random import random
 import gymnasium as gym
 from collections import defaultdict
 import torch
@@ -6,6 +7,9 @@ from tqdm import tqdm
 from typing import Tuple
 import os
 import pickle
+import random
+
+from survey_ops.utils.interpolate import interpolate_on_sphere
 
 class Agent:
     """
@@ -151,7 +155,7 @@ class Agent:
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
     
-    def evaluate(self, env, num_episodes):
+    def evaluate(self, env, num_episodes, field_choice_method='interp'):
         """Evaluates the agent in an environment for multiple episodes.
 
         Runs greedy (epsilon-free) policy evaluation using the current
@@ -184,6 +188,8 @@ class Agent:
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
+        field2nvisits, bin2fields_in_bin, field2radec = env.unwrapped.field2nvisits, env.unwrapped.bin2fields_in_bin, env.unwrapped.field2radec
+        hpGrid = env.unwrapped.test_dataset.hpGrid
         
         for episode in tqdm(range(num_episodes)):
             obs, info = env.reset()
@@ -201,7 +207,8 @@ class Agent:
                 with torch.no_grad():
                     action_mask = info.get('action_mask', None)
                     action = self.act(obs, action_mask, epsilon=None)  # greedy
-                    obs, reward, terminated, truncated, info = env.step(action)
+                    field_id = self.choose_field(obs, action, info, field2nvisits, field2radec, bin2fields_in_bin, hpGrid, field_choice_method)
+                    obs, reward, terminated, truncated, info = env.step((action, field_id))
                     obs_list.append(obs)
                     rewards_list.append(reward)
                     episode_reward += reward
@@ -250,6 +257,7 @@ class Agent:
         """
         return self.algorithm.select_action(obs, action_mask, epsilon)
     
+    
     def save(self, filepath):
         """Saves algorithm parameters to a file.
 
@@ -265,3 +273,55 @@ class Agent:
             filepath (str): Path to previously saved model weights.
         """
         self.algorithm.load(filepath)
+
+    def choose_field(self, obs, bin_num, info, field2nvisits, field2radec, bin2fields_in_bin, hpGrid, field_choice_method): # az, el, az_data, el_data, values, field_ids_in_bin, bin_num
+        """
+        Choose field in bin based on interpolated Q-values
+        """
+        visited = info.get('visited', None)
+        action_mask = info.get('action_mask', None)
+        field_ids_in_bin = bin2fields_in_bin[bin_num]
+        field_ids_in_bin = [fid for fid in field_ids_in_bin if visited.count(fid) < field2nvisits[fid]]
+
+        if bin_num not in bin2fields_in_bin:
+            return None, None
+        
+        if field_choice_method == 'interp':
+            with torch.no_grad():
+                obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+                mask = torch.as_tensor(action_mask, device=self.device, dtype=torch.bool)
+                # obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
+                # mask = action_mask.to(self.device, dtype=torch.bool).unsqueeze(0)
+                q_vals = self.algorithm.policy_net(obs).squeeze(0)
+                q_vals = q_vals.cpu().detach().numpy()
+
+            lon_data = hpGrid.lon
+            lat_data = hpGrid.lat
+
+            target_lonlats = np.array([field2radec[fid] for fid in field_ids_in_bin])
+            
+            q_interpolated = interpolate_on_sphere(target_lonlats[:, 0], target_lonlats[:, 1], lon_data, lat_data, q_vals)
+            print(len(q_interpolated), len(field_ids_in_bin))
+            if self.algorithm.name == 'BehaviorCloning':
+                best_idx = np.argmin(q_interpolated)
+            else:
+                best_idx = np.argmax(q_interpolated)
+            best_field = field_ids_in_bin[best_idx]
+
+            return best_field
+        elif field_choice_method == 'random':
+            field_id = random.choice(field_ids_in_bin)
+            return field_id
+        
+
+    #         lon_data = hpGrid.lon
+            # lat_data = hpGrid.lat
+            # q_interpolated = interpolate_on_sphere(az, el, lon_data, lat_data, q_vals)
+            
+            # with torch.no_grad():
+            #     obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
+            #     mask = mask.to(self.device, dtype=torch.bool).unsqueeze(0)
+            #     action_logits = self.policy_net(obs)
+            #     # mask invalid actions
+            #     action_logits[~mask] = float('-inf')
+            #     action = torch.argmax(action_logits, dim=1)

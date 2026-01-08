@@ -243,7 +243,7 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, train_dataset, test_dataset, max_nights=None, field_choice_method='interp', exp_time=90., slew_time=30.):
+    def __init__(self, train_dataset, test_dataset, max_nights=None, exp_time=90., slew_time=30.):
         """
         Args
         ----
@@ -259,7 +259,6 @@ class OfflineEnv(BaseTelescope):
         self.time_dependent_feature_substrs = ['az', 'el', 'ha', 'time_fraction_since_start']
         self.cyclical_feature_names = train_dataset.cyclical_feature_names
         self.z_score_feature_names = train_dataset.z_score_feature_names
-        self.field_choice_method = field_choice_method
         self.do_z_score_norm = train_dataset.do_z_score_norm
         self.z_score_feature_names = train_dataset.z_score_feature_names
         self.do_cyclical_norm = train_dataset.do_cyclical_norm
@@ -313,7 +312,8 @@ class OfflineEnv(BaseTelescope):
             dtype=np.float32,
         )
         # Define action space        
-        self.action_space = gym.spaces.Discrete(n=self.hpGrid.npix)
+        # self.action_space = gym.spaces.Discrete(n=self.hpGrid.npix)
+        self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.hpGrid.npix, len(self.field2radec)]), dtype=np.int32)
 
         self._state = np.zeros(self.obs_dim, dtype=np.float32)
         super().__init__()
@@ -342,7 +342,7 @@ class OfflineEnv(BaseTelescope):
         info = self._get_info()
         return state, info
 
-    def step(self, action: int):
+    def step(self, action: tuple):
         """Execute one timestep within the environment.
 
         Args
@@ -359,9 +359,10 @@ class OfflineEnv(BaseTelescope):
                 - info (dict): Auxiliary diagnostic information.
         """
         assert self.action_space.contains(action), f"Invalid action {action}"
-        action = int(action)
+        action, field_id = int(action[0]), int(action[1])
+        assert field_id in self.bin2fields_in_bin[action], f"Field ID {field_id} not in bin {action}"
         last_field_id = np.int32(self._field_id)
-        self._update_state(action)
+        self._update_state((action, field_id))
         
         # ------------------- Calculate reward ------------------- #
 
@@ -414,7 +415,6 @@ class OfflineEnv(BaseTelescope):
         self._action_mask = np.zeros(self.nbins, dtype=bool)
         valid_bins = np.array(list(self.bin2fields_in_bin.keys()))
         self._action_mask[valid_bins] = True
-        # self._update_action_mask(self._bin_num)
     
     def _start_new_night(self):
         self._night_idx +=1
@@ -431,7 +431,6 @@ class OfflineEnv(BaseTelescope):
         
         # first_feature_state_in_night = self.test_dataset._get_pointing_features_from_row(row=first_row_in_night)
         self._state = [first_row_in_night[feat_name] for feat_name in self.state_feature_names]
-        # self._update_action_mask(self._bin_num) # zenith bin may not be in valid bins
 
     def _update_action_mask(self, action): #DONE
         """
@@ -459,8 +458,9 @@ class OfflineEnv(BaseTelescope):
             action (int): The chosen field ID to observe next.
         """
         self._timestamp += self.time_between_obs
+        action, field_id = int(action[0]), int(action[1])
+
         self._bin_num = action
-        field_id = self._choose_field_in_bin(bin_num=action)
         self._field_id = field_id
         self._visited.append(field_id)
 
@@ -517,7 +517,10 @@ class OfflineEnv(BaseTelescope):
         -------
             dict: A dictionary containing the current action mask.
         """
-        return {'action_mask': self._action_mask.copy()}
+        return {'action_mask': self._action_mask.copy(), 
+                'visited': self._visited,
+                'timestamp': self._timestamp
+                } # 'night_idx': self._night_idx, 'timestamp': self._timestamp, 'field_id': self._field_id}
     
     def _get_termination_status(self):
         """
@@ -557,19 +560,21 @@ class OfflineEnv(BaseTelescope):
 
         return state
     
-    def _choose_field_in_bin(self, bin_num):
-        field_ids_in_bin = self.bin2fields_in_bin[bin_num]
-        # radecs = self.bin2fields_in_bin[bin_num]
-        # az, el = ephemerides.equatorial_to_topographic(ra=radecs[:, 0], dec=radecs[:, 1], time=self._timestamp)
+    # def _choose_field_in_bin(self, bin_num):
+    #     field_ids_in_bin = self.bin2fields_in_bin[bin_num]
+    #     # radecs = self.bin2fields_in_bin[bin_num]
+    #     # az, el = ephemerides.equatorial_to_topographic(ra=radecs[:, 0], dec=radecs[:, 1], time=self._timestamp)
+    #     field_ids_in_bin = [fid for fid in field_ids_in_bin if self._visited.count(fid) < self.field2nvisits[fid]]
         
-        if bin_num not in self.bin2fields_in_bin:
-            return None, None
-        if self.field_choice_method == 'interp':
-            # interpolate_on_sphere(az, el, az_data, el_data, values)
-            raise NotImplementedError
-        elif self.field_choice_method == 'random':
-            field_id = random.choice(field_ids_in_bin)
-            # For now, only choose fields that are in test data
-            return field_id
+    #     if bin_num not in self.bin2fields_in_bin:
+    #         return None
+    #     if self.field_choice_method == 'interp':
+    #         q_interpolated = interpolate_on_sphere(az, el, az_data, el_data, values)
+    #         max_idx = np.argmax(q_interpolated)
+    #         best_field = field_ids_in_bin[max_idx]
+    #         return best_field
+    #     elif self.field_choice_method == 'random':
+    #         field_id = random.choice(field_ids_in_bin)
+    #         return field_id
 
 
