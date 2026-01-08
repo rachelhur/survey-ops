@@ -1,5 +1,5 @@
 import ephem
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import healpy as hp
 from survey_ops.utils import units
@@ -33,7 +33,7 @@ def blanco_observer(time=None):
     if time is None:
         observer.date = datetime.utcnow().strftime("%Y/%m/%d %H:%M:%S")
     else:
-        observer.date = datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S")
+        observer.date = datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
 
     return observer
 

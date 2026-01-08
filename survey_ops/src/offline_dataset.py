@@ -36,8 +36,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 additional_bin_features=[],
                 include_default_features=True,
                 include_bin_features=True,
-                do_z_score_norm=True,
-                do_cyclical_norm=True
+                do_z_score_norm=False,
+                do_cyclical_norm=True,
+                do_max_norm=True,
+                do_inverse_airmass=True,
                 ):
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
@@ -74,8 +76,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon']
             if self.hpGrid:
                 if self.hpGrid.is_azel:
-                    required_bin_features += ['delta_ra', 'delta_dec']
-                    raise NotImplementedError
+                    required_bin_features += ['ra', 'dec'] #['delta_ra', 'delta_dec']
+                    # raise NotImplementedError
                 else:
                     required_bin_features += ['az', 'el']
                     
@@ -84,13 +86,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             required_bin_features = []
 
         # Set up normalization decisions
-        self.do_z_score_norm = do_z_score_norm
-        self.z_score_feature_names = ['dec', 'el', 'airmass']
+        self.do_z_score_norm = False #do_z_score_norm
+        self.z_score_feature_names = []
         self.do_cyclical_norm = do_cyclical_norm
-        if self.do_cyclical_norm:
-            self.cyclical_feature_names = ['ra', 'az', 'ha']
-        else:
-            self.cyclical_feature_names = []
+        self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
+        self.do_max_norm = True
+        self.max_norm_feature_names = ['dec', 'el'] if self.do_max_norm else []
+        self.do_inverse_airmass = True
 
         # Include additional features not in default features above
         pointing_feature_names = required_point_features + additional_pointing_features
@@ -162,8 +164,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.obs_dim = self.states.shape[-1]
 
         # Normalize states
-        if self.do_z_score_norm:
-            self._do_noncyclic_normalizations()
+        self._do_noncyclic_normalizations()
 
     def __len__(self):
         return self.states.shape[0]
@@ -191,34 +192,45 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return feature_names
 
     def _do_noncyclic_normalizations(self):
-        """Performs z-score normalization on any non-periodic features"""
-        # mask non-zscore features
-        # cyclic_mask = torch.tensor(
-        #     np.array([any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names) for feat_name in self.state_feature_names]),
-        #     dtype=torch.bool
-        #     )
-        # airmass_mask = torch.tensor(
-        #     np.array('airmass' in feat_name for feat_name in self.state_feature_names),
-        #     dtype=torch.bool
-        #     )
-        z_score_mask = np.array([
-            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-            for feat_name in self.state_feature_names
-        ])
+        """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
+        if self.do_inverse_airmass:
+            airmass_mask = torch.tensor(np.array(['airmass' in feat_name for feat_name in self.state_feature_names]), dtype=torch.bool)
+            self.states[:, airmass_mask] = 1.0 / self.states[:, airmass_mask]
+            self.next_states[:, airmass_mask] = 1.0
+        
+        if self.do_max_norm:
+            max_norm_mask = torch.tensor(np.array([
+                any(max_feat in feat_name for max_feat in self.max_norm_feature_names)
+                for feat_name in self.state_feature_names
+                ], dtype=bool), dtype=torch.bool)
+            self.states[:, max_norm_mask] = self.states[:, max_norm_mask] / (np.pi/2)
+            self.next_states[:, max_norm_mask] = self.next_states[:, max_norm_mask] / (np.pi/2)
 
         # z-score normalization for any non-periodic features
-        self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
-        self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
-        self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
-        self.next_states[torch.isnan(self.next_states)] = 10
+        if self.do_z_score_norm:
+            z_score_mask = torch.tensor(np.array([
+                any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+                for feat_name in self.state_feature_names
+                ], dtype=bool)
+                , dtype=torch.bool
+            )
 
-        mask_null = self.states == 0
-        new_states = self.states.clone()
+            self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
+            self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
+            self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
+            self.next_states[torch.isnan(self.next_states)] = 10
 
-        new_states[:, z_score_mask] = ((new_states[:, z_score_mask] - self.means) / self.stds)
-        new_states[mask_null] = 0.
-        new_states[torch.isnan(new_states)] = 10
-        self.states = new_states
+            mask_zenith = self.states == 0 # need to find a way to mask zenith states
+            states = self.states.clone()
+
+            states[:, z_score_mask] = ((states[:, z_score_mask] - self.means) / self.stds)
+            states[mask_zenith] = 0.
+            states[torch.isnan(states)] = 10
+            self.states = states
+            raise NotImplementedError # see comment above about masking zenith states
+        else:
+            self.means = None
+            self.stds = None
 
     def _relabel_mislabelled_objects(self, df):
         """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
@@ -301,9 +313,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # These features should probably always be normalized
         df['time_fraction_since_start'] = df.groupby('night')['timestamp'].transform(lambda x: (x - x.values[0]) / (x.values[-1] - x.values[0]) if len(x) > 1 else 0)
         # df['time_seconds_since_start'] = df.groupby('night')['timestamp'].transform(lambda x: (x - x.min()) / x.max())
-
         # convert degrees to radians
-        df.loc[:, ['ra', 'dec', 'az', 'zd']] *= units.deg
+        df.loc[:, ['ra', 'dec', 'az', 'zd', 'ha']] *= units.deg
 
         # Normalize periodic features here and add as df cols
         if self.do_cyclical_norm:
@@ -327,6 +338,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             if self.hpGrid.is_azel:
                 lon = df['az']
                 lat = df['el']
+                df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
                 # time x ra, dec --> bin: (az, el)
                 # self.bin2fields = lambda time: ephemerides.equatorial_to_topographic(ra=df['az'], dec=df['el'], time=time)
                 # raise NotImplementedError
@@ -336,6 +348,14 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
 
         df['field_id'] = df['object'].map({v: k for k, v in self.field2name.items()})
+
+        # Insert zenith states in dataframe (needed for gym.environment to use zenith state as first state)
+        _df = df.reset_index(drop=True, inplace=False)
+        zenith_timestamps = _df.groupby('night').head(1).timestamp - 10
+        zenith_df = self._get_zenith_states(original_df=df, timestamps=zenith_timestamps)
+        df = pd.concat([df, zenith_df], ignore_index=True)
+        df = df.sort_values(by='timestamp')
+        # "States" require inserting the "zenith state" before first observation of each night, and deleting last observation
 
         # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
@@ -353,22 +373,24 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Pointing features already in DECam data
         missing_cols = set(self.pointing_feature_names) - set(df.columns) == 0
         assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be added in method self._process_dataframe()'
-        pointing_features = df[self.pointing_feature_names].to_numpy()
+        pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+        next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
 
-        # "Next States" are just all observations
-        next_pointing_features = pointing_features.copy()
+        # # "Next States" are just all observations
+        # next_pointing_features = pointing_features.copy()
         
-        # "States" require inserting rows of 0's before first observation of each night, and deleting last observation
-        night_end_indices = df.groupby('night').tail(1).index - df.head(1).index
+        # # "States" require inserting the "zenith state" before first observation of each night, and deleting last observation
+        # _df = df.reset_index(drop=True, inplace=False)
+        # night_end_indices = _df.groupby('night').tail(1).index # - df.head(1).index
 
-        # Calculate zenith states
-        zenith_timestamps = df.groupby('night').head(1).timestamp - 10
+        # # Calculate zenith states
+        # zenith_timestamps = _df.groupby('night').head(1).timestamp - 10
 
-        zenith_states = self._get_zenith_states(timestamps=zenith_timestamps)
-        pointing_features[night_end_indices[:-1]] = zenith_states[:-1] # Replace last observation of each night with 0's, except last observation of entire self
-        pointing_features = pointing_features[:-1, :] # remove last observation row
-        # zero_row = np.zeros_like(pointing_features[0]) # insert row of 0s in front of first observation
-        pointing_features = np.vstack([zenith_states[-1], pointing_features])
+        # zenith_states = self._get_zenith_states(timestamps=zenith_timestamps, original_df_columns=['asdf'])
+        # pointing_features[night_end_indices[:-1]] = zenith_states[1:] # Replace last observation of each night with zenith states[1:], except last observation of entire dataset
+        # pointing_features = pointing_features[:-1, :] # remove last observation of entire dataset
+        # # insert zenith_states[0] in front of first observation
+        # pointing_features = np.vstack([zenith_states[0], pointing_features])
  
         return pointing_features, next_pointing_features
         
@@ -454,8 +476,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             if self.hpGrid.is_azel:
                 lon, lat = df.az.values, df.el.values
             else:
-                lon, lat = df.ra.values, df.dec.values
-            indices = self.hpGrid.ang2idx(lon=lon, lat=lat)
+                # lon, lat = df.ra.values, df.dec.values
+                radec_no_zen = df.groupby('night').tail(-1)[['ra', 'dec']].values
+            indices = self.hpGrid.ang2idx(lon=radec_no_zen[:, 0], lat=radec_no_zen[:, 1])
             return indices
         
         elif binning_method == 'uniform_grid' and bin_space == 'azel':
@@ -496,19 +519,24 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # given timestamp, determine bins which are outside of observable range
         return np.ones((self.num_transitions, self.num_actions), dtype=bool)
 
-    def _get_zenith_states(self, timestamps):
+    def _get_zenith_states(self, original_df, timestamps):
         LSTs = get_lst(timestamps)
         blanco_lat = -0.5265599205997796 # rad
 
         zenith_rows = []
+        nights = original_df.night.unique()
         for i_row, time in enumerate(timestamps):
             row_dict = {}
+            row_dict['timestamp'] = time
+            row_dict['night'] = nights[i_row]
             row_dict['ra'] = LSTs[i_row]
             row_dict['sun_ra'], row_dict['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=time)
             row_dict['moon_ra'], row_dict['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=time)
             row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'])
             row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'])
-            row_dict['time_fraction_since_start'] = 0.
+            total_time_in_night = original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[-1] - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]
+            row_dict['time_fraction_since_start'] = (time - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]) / total_time_in_night if total_time_in_night > 0 else 0
+            row_dict['bin'] = self.hpGrid.ang2idx(lon=row_dict['ra'], lat=blanco_lat)
             zenith_rows.append(row_dict)
 
         zenith_df = pd.DataFrame(zenith_rows)
@@ -517,14 +545,20 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         zenith_df['el'] = np.pi/2
         zenith_df['airmass'] = 1
         zenith_df['ha'] = 0
-            
+        zenith_df['object'] = 'zenith'
+        zenith_df['field_id'] = -1
+        original_df
         for feat_name in self.base_pointing_feature_names:
             if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
                 zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
                 zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
-        zenith_pointing_features = zenith_df[self.pointing_feature_names].to_numpy()
-        return zenith_pointing_features
+        for feat_name in original_df.columns:
+            if feat_name not in zenith_df.columns:
+                zenith_df[feat_name] = np.nan
+
+        # zenith_pointing_features = zenith_df[self.pointing_feature_names].to_numpy()
+        return zenith_df
     
     def get_dataloader(self, batch_size, num_workers, pin_memory):
         loader = DataLoader(

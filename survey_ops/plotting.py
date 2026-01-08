@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from survey_ops.utils import units, ephemerides
 import tempfile, os, shutil, glob
 import imageio.v2 as imageio
@@ -12,6 +12,8 @@ import matplotlib.patheffects as pe
 from matplotlib.patches import Polygon
 from matplotlib import cm, colors
 from matplotlib.ticker import MaxNLocator
+
+from tqdm import tqdm
 
 
 class SkyMap:
@@ -234,7 +236,7 @@ def plot_fields(
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
     # set title to selected time
-    plt.title(datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
+    plt.title(datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
 
     # plot current field
     skymap.scatter(
@@ -429,8 +431,8 @@ def plot_bins(
     zenith_ra, zenith_dec = ephemerides.get_source_ra_dec("zenith", observer=observer)
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
-    # set title to selected time
-    plt.title(datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
+    # set title to selected time #TODO fix timezone issue
+    plt.title(datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
 
     # re-create the healpix grid
     hpgrid = ephemerides.HealpixGrid(nside=nside, is_azel=is_azel)
@@ -601,7 +603,7 @@ def plot_bins_movie(
 
     # plot each observation successively, saving pngs
     plt.ioff()
-    for i, (time, idx, alternate_idx) in enumerate(zip(times, idxs, alternate_idxs)):
+    for i, (time, idx, alternate_idx) in tqdm(enumerate(zip(times, idxs, alternate_idxs)), total=len(times)):
         skymap = plot_bins(
             time,
             current_idx=idx,

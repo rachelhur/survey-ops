@@ -2,6 +2,7 @@ from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
 import pandas as pd
+import torch
 
 from survey_ops.utils import ephemerides, units
 from survey_ops.utils.interpolate import interpolate_on_sphere
@@ -259,6 +260,12 @@ class OfflineEnv(BaseTelescope):
         self.cyclical_feature_names = train_dataset.cyclical_feature_names
         self.z_score_feature_names = train_dataset.z_score_feature_names
         self.field_choice_method = field_choice_method
+        self.do_z_score_norm = train_dataset.do_z_score_norm
+        self.z_score_feature_names = train_dataset.z_score_feature_names
+        self.do_cyclical_norm = train_dataset.do_cyclical_norm
+        self.do_max_norm = train_dataset.do_max_norm
+        self.max_norm_feature_names = train_dataset.max_norm_feature_names
+        self.do_inverse_airmass = train_dataset.do_inverse_airmass
 
         # self.fieldname2idx = train_dataset.fieldname2idx
         # self.fieldidx2name = {v: k for k, v in train_dataset.fieldname2idx.items()}
@@ -282,8 +289,9 @@ class OfflineEnv(BaseTelescope):
         self.pointing_feature_names = train_dataset.pointing_feature_names
         self.bin_feature_names = train_dataset.bin_feature_names
 
-        self.zscore_means = train_dataset.means.detach().numpy()
-        self.zscore_stds = train_dataset.stds.detach().numpy()
+        if self.do_z_score_norm:
+            self.zscore_means = train_dataset.means.detach().numpy()
+            self.zscore_stds = train_dataset.stds.detach().numpy()
 
         self.pd_nightgroup = test_dataset._df.groupby('night')
         self.max_nights = max_nights
@@ -362,7 +370,8 @@ class OfflineEnv(BaseTelescope):
 
         # -------------------- Start new night if last transition -----------------------#
 
-        is_new_night = self._state[-1] >= 1.0 # time_fraction_since_start > = 1.0
+        # is_new_night = self._state[-1] >= 1.0 # time_fraction_since_start > = 1.0
+        is_new_night = self._timestamp >= self._night_final_timestamp
         if is_new_night:
             self._start_new_night()
         
@@ -403,9 +412,9 @@ class OfflineEnv(BaseTelescope):
             raise NotImplementedError
         
         self._action_mask = np.zeros(self.nbins, dtype=bool)
-        valid_bins = np.array(list(self.bin2radec.keys()))
+        valid_bins = np.array(list(self.bin2fields_in_bin.keys()))
         self._action_mask[valid_bins] = True
-        self._update_action_mask(self._bin_num)
+        # self._update_action_mask(self._bin_num)
     
     def _start_new_night(self):
         self._night_idx +=1
@@ -420,8 +429,9 @@ class OfflineEnv(BaseTelescope):
         self._visited.append(self._field_id)
         self._timestamp = first_row_in_night['timestamp']
         
+        # first_feature_state_in_night = self.test_dataset._get_pointing_features_from_row(row=first_row_in_night)
         self._state = [first_row_in_night[feat_name] for feat_name in self.state_feature_names]
-        self._update_action_mask(self._bin_num)
+        # self._update_action_mask(self._bin_num) # zenith bin may not be in valid bins
 
     def _update_action_mask(self, action): #DONE
         """
@@ -433,7 +443,7 @@ class OfflineEnv(BaseTelescope):
         Args:
             action (int): The field ID to check and potentially mask.
         """
-        # If any fields in bin are not fully visited, do not update action mask
+        # If all fields in bin are fully visited, bin is no longer valid action
         for field_id in self.bin2fields_in_bin[action]:
             max_nvisits = self.field2nvisits[field_id]
             if self._visited.count(field_id) < max_nvisits:
@@ -458,6 +468,7 @@ class OfflineEnv(BaseTelescope):
         new_features['ra'], new_features['dec'] = self.field2radec[field_id]
         new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
         new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
+
         
         cos_zenith = np.cos(90 * units.deg - new_features['el'])
         new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
@@ -523,18 +534,26 @@ class OfflineEnv(BaseTelescope):
         return terminated
 
     def _do_noncyclic_normalizations(self, state):
-        """Performs z-score normalization on any non-periodic features"""
-        # mask non-zscore features
-        # cyclic_mask = np.array([any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names) for feat_name in self.state_feature_names])
-        # z_score_mask = ~cyclic_mask
-        z_score_mask = np.array([
-            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-            for feat_name in self.state_feature_names
-        ])
+        """Performs z-score normalization on any non-periodic features, including bin-specific features"""
+        if self.do_inverse_airmass:
+            airmass_mask = np.array(['airmass' in feat_name for feat_name in self.state_feature_names], dtype=bool)
+            state[airmass_mask] = 1.0 / state[airmass_mask]
+        
+        if self.do_max_norm:
+            max_norm_mask = np.array([
+                any(max_feat in feat_name for max_feat in self.max_norm_feature_names)
+                for feat_name in self.state_feature_names
+                ], dtype=bool)
+            state[max_norm_mask] = state[max_norm_mask] / (np.pi/2)
 
         # z-score normalization for any non-periodic features
-        state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
-        state[np.isnan(state)] = 10
+        if self.do_z_score_norm:
+            z_score_mask = np.array([
+            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+            for feat_name in self.state_feature_names
+            ])
+            state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
+        state[np.isnan(state)] = 10 # for airmass nan values -- only airmass should be high
 
         return state
     
