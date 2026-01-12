@@ -243,7 +243,7 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, train_dataset, test_dataset, max_nights=None, exp_time=90., slew_time=30.):
+    def __init__(self, test_dataset, max_nights=None, exp_time=90., slew_time=30.):
         """
         Args
         ----
@@ -251,60 +251,59 @@ class OfflineEnv(BaseTelescope):
                      static environment parameters and observation data.
         """
         # instantiate static attributes
-        self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.exp_time = exp_time
         self.slew_time = slew_time
         self.time_between_obs = exp_time + slew_time
         self.time_dependent_feature_substrs = ['az', 'el', 'ha', 'time_fraction_since_start']
-        self.cyclical_feature_names = train_dataset.cyclical_feature_names
-        self.z_score_feature_names = train_dataset.z_score_feature_names
-        self.do_z_score_norm = train_dataset.do_z_score_norm
-        self.z_score_feature_names = train_dataset.z_score_feature_names
-        self.do_cyclical_norm = train_dataset.do_cyclical_norm
-        self.do_max_norm = train_dataset.do_max_norm
-        self.max_norm_feature_names = train_dataset.max_norm_feature_names
-        self.do_inverse_airmass = train_dataset.do_inverse_airmass
+        self.cyclical_feature_names = test_dataset.cyclical_feature_names
+        self.z_score_feature_names = test_dataset.z_score_feature_names
+        self.do_z_score_norm = test_dataset.do_z_score_norm
+        self.z_score_feature_names = test_dataset.z_score_feature_names
+        self.do_cyclical_norm = test_dataset.do_cyclical_norm
+        self.do_max_norm = test_dataset.do_max_norm
+        self.max_norm_feature_names = test_dataset.max_norm_feature_names
+        self.do_inverse_airmass = test_dataset.do_inverse_airmass
 
         # self.fieldname2idx = train_dataset.fieldname2idx
         # self.fieldidx2name = {v: k for k, v in train_dataset.fieldname2idx.items()}
         # self.fieldname2bin = train_dataset.fieldname2bin
         # self.bin2fieldname = train_dataset.bin2fieldname
-        self.bin2fieldradecs = train_dataset.bin2fieldradecs
+        self.bin2fieldradecs = test_dataset.bin2fieldradecs
         # The following is saved in ../data/*.json files
-        self.bin2fields_in_bin = {int(k): v for k, v in train_dataset.bin2fields_in_bin.items()}
-        self.field2radec = {int(k): v for k, v in train_dataset.field2radec.items()}
-        self.bin2radec = {int(k): v for k, v in train_dataset.bin2radec.items()}
-        self.field2nvisits = {int(fid): int(count) for fid, count in train_dataset.field2nvisits.items()}
+        self.bin2fields_in_bin = {int(k): v for k, v in test_dataset.bin2fields_in_bin.items()}
+        self.field2radec = {int(k): v for k, v in test_dataset.field2radec.items()}
+        self.bin2radec = {int(k): v for k, v in test_dataset.bin2radec.items()}
+        self.field2nvisits = {int(fid): int(count) for fid, count in test_dataset.field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
-        self.nbins = len(train_dataset.bin2radec)
+        self.nbins = len(test_dataset.bin2radec)
 
-        self.hpGrid = train_dataset.hpGrid
+        self.hpGrid = test_dataset.hpGrid
         
-        self.base_state_feature_names = train_dataset.base_feature_names
-        self.base_pointing_feature_names = train_dataset.base_pointing_feature_names
-        self.base_bin_feature_names = train_dataset.base_bin_feature_names
-        self.state_feature_names = train_dataset.state_feature_names
-        self.pointing_feature_names = train_dataset.pointing_feature_names
-        self.bin_feature_names = train_dataset.bin_feature_names
+        self.base_state_feature_names = test_dataset.base_feature_names
+        self.base_pointing_feature_names = test_dataset.base_pointing_feature_names
+        self.base_bin_feature_names = test_dataset.base_bin_feature_names
+        self.state_feature_names = test_dataset.state_feature_names
+        self.pointing_feature_names = test_dataset.pointing_feature_names
+        self.bin_feature_names = test_dataset.bin_feature_names
 
         if self.do_z_score_norm:
-            self.zscore_means = train_dataset.means.detach().numpy()
-            self.zscore_stds = train_dataset.stds.detach().numpy()
+            self.zscore_means = test_dataset.means.detach().numpy()
+            self.zscore_stds = test_dataset.stds.detach().numpy()
 
         self.pd_nightgroup = test_dataset._df.groupby('night')
         self.max_nights = max_nights
         if max_nights is None:
             self.max_nights = self.pd_nightgroup.ngroups
-        if hasattr(train_dataset, 'reward_func'):
-            self._reward_func = train_dataset.reward_func
+        if hasattr(test_dataset, 'reward_func'):
+            self._reward_func = test_dataset.reward_func
         else:
             self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
 
         # self._visited = []
         # self._night_idx = -1
 
-        self.obs_dim = train_dataset.obs_dim
+        self.obs_dim = test_dataset.obs_dim
         self.observation_space = gym.spaces.Box(
             low=-100, #np.min(dataset.obs),
             high=1e8,
@@ -342,7 +341,7 @@ class OfflineEnv(BaseTelescope):
         info = self._get_info()
         return state, info
 
-    def step(self, action: tuple):
+    def step(self, actions: np.ndarray):
         """Execute one timestep within the environment.
 
         Args
@@ -358,10 +357,12 @@ class OfflineEnv(BaseTelescope):
                 - truncated (bool): Whether the episode was truncated (always False here).
                 - info (dict): Auxiliary diagnostic information.
         """
-        assert self.action_space.contains(action), f"Invalid action {action}"
-        action, field_id = int(action[0]), int(action[1])
+        assert self.action_space.contains(actions), f"Invalid action {actions}"
+        action, field_id = np.int32(actions[0]), int(actions[1])
         assert field_id in self.bin2fields_in_bin[action], f"Field ID {field_id} not in bin {action}"
         last_field_id = np.int32(self._field_id)
+
+        # ------------------- Advance state ------------------- #
         self._update_state((action, field_id))
         
         # ------------------- Calculate reward ------------------- #
@@ -375,6 +376,8 @@ class OfflineEnv(BaseTelescope):
         is_new_night = self._timestamp >= self._night_final_timestamp
         if is_new_night:
             self._start_new_night()
+        else:
+            self._is_new_night = False
         
         # -------------------- Terminate condition -----------------------#
         truncated = False
@@ -400,6 +403,7 @@ class OfflineEnv(BaseTelescope):
         if init_state is None:
             self._visited = []
             self._night_idx = -1
+            self._is_new_night = True
             self._start_new_night()
         else:
             self._state = options['init_state']
@@ -418,6 +422,7 @@ class OfflineEnv(BaseTelescope):
     
     def _start_new_night(self):
         self._night_idx +=1
+        self._is_new_night = True
         if self._night_idx >= self.max_nights:
             return
 
@@ -468,7 +473,6 @@ class OfflineEnv(BaseTelescope):
         new_features['ra'], new_features['dec'] = self.field2radec[field_id]
         new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
         new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
-
         
         cos_zenith = np.cos(90 * units.deg - new_features['el'])
         new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
@@ -502,12 +506,12 @@ class OfflineEnv(BaseTelescope):
             np.ndarray: The observation vector, potentially normalized.
         """
 
+        self._state = np.array(self._state, dtype=np.float32)
         state_copy = np.array(self._state, dtype=np.float32).copy()
         # state_norm = state_copy
-        state_norm = self._do_noncyclic_normalizations(state=state_copy)
-        self._state = state_norm.copy()
-
-        return state_norm
+        state_normed = self._do_noncyclic_normalizations(state=state_copy)
+        self._state_normed = state_normed.copy()
+        return state_normed
 
     def _get_info(self):
         """
@@ -519,7 +523,11 @@ class OfflineEnv(BaseTelescope):
         """
         return {'action_mask': self._action_mask.copy(), 
                 'visited': self._visited,
-                'timestamp': self._timestamp
+                'timestamp': int(self._timestamp),
+                'is_new_night': bool(self._is_new_night),
+                'night_idx': int(self._night_idx),
+                'bin': int(self._bin_num),
+                'field_id': int(self._field_id)
                 } # 'night_idx': self._night_idx, 'timestamp': self._timestamp, 'field_id': self._field_id}
     
     def _get_termination_status(self):
@@ -559,22 +567,3 @@ class OfflineEnv(BaseTelescope):
         state[np.isnan(state)] = 10 # for airmass nan values -- only airmass should be high
 
         return state
-    
-    # def _choose_field_in_bin(self, bin_num):
-    #     field_ids_in_bin = self.bin2fields_in_bin[bin_num]
-    #     # radecs = self.bin2fields_in_bin[bin_num]
-    #     # az, el = ephemerides.equatorial_to_topographic(ra=radecs[:, 0], dec=radecs[:, 1], time=self._timestamp)
-    #     field_ids_in_bin = [fid for fid in field_ids_in_bin if self._visited.count(fid) < self.field2nvisits[fid]]
-        
-    #     if bin_num not in self.bin2fields_in_bin:
-    #         return None
-    #     if self.field_choice_method == 'interp':
-    #         q_interpolated = interpolate_on_sphere(az, el, az_data, el_data, values)
-    #         max_idx = np.argmax(q_interpolated)
-    #         best_field = field_ids_in_bin[max_idx]
-    #         return best_field
-    #     elif self.field_choice_method == 'random':
-    #         field_id = random.choice(field_ids_in_bin)
-    #         return field_id
-
-

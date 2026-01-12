@@ -35,9 +35,8 @@ class Agent:
     def __init__(
             self,
             algorithm,
-            normalize_obs,
-            outdir,
-            env: gym.Env = None,
+            train_outdir,
+            # env: gym.Env = None,
             ):
         """
         Args
@@ -49,13 +48,10 @@ class Agent:
         """
         self.algorithm = algorithm
         self.device = algorithm.device
-        self.normalize_obs = normalize_obs
-        self.env = env
-        if not os.path.exists(outdir):
-            os.makedirs(outdir)
-        self.outdir = outdir
+        if not os.path.exists(train_outdir):
+            os.makedirs(train_outdir)
+        self.train_outdir = train_outdir
         
-
     def fit(self, num_epochs, dataset=None, batch_size=None, dataloader=None, eval_freq=100, patience=10):
         """Trains the agent on a transition dataset.
 
@@ -92,8 +88,8 @@ class Agent:
             'test_acc_history': [] 
         }
 
-        save_filepath = self.outdir + 'best_weights.pt'
-        train_metrics_filepath = self.outdir + 'train_metrics.pkl'
+        save_filepath = self.train_outdir + 'best_weights.pt'
+        train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
 
         if dataloader is not None:
             # TODO for v0 only - remove when model is updated for release
@@ -155,7 +151,7 @@ class Agent:
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
     
-    def evaluate(self, env, num_episodes, field_choice_method='interp'):
+    def evaluate(self, env, num_episodes, field_choice_method='interp', eval_outdir=None):
         """Evaluates the agent in an environment for multiple episodes.
 
         Runs greedy (epsilon-free) policy evaluation using the current
@@ -179,12 +175,11 @@ class Agent:
                 - `observations` (dict of arrays per episode)
                 - `rewards` (dict of reward arrays per episode)
         """
+        eval_outdir = eval_outdir if eval_outdir is not None else self.train_outdir + 'evaluation/'
+        if not os.path.exists(eval_outdir):
+            os.makedirs(eval_outdir)
+            
         # evaluation metrics
-        observations = {}
-        rewards = {}
-        timestamps = {}
-        field_ids = {}
-        bin_nums = {}
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
@@ -196,33 +191,49 @@ class Agent:
             episode_reward = 0
             terminated = False
             truncated = False
-            obs_list = [obs]
-            rewards_list = [0]
-            timestamps_list = [env.unwrapped._timestamp]
-            field_ids_list = [env.unwrapped._field_id]
-            bin_nums_list = [env.unwrapped._bin_num]
-            i = 0
+            num_nights = env.unwrapped.max_nights
+            observations = {f'night-{i}': [] for i in range(num_nights)}
+            rewards = {f'night-{i}': [] for i in range(num_nights)}
+            timestamps = {f'night-{i}': [] for i in range(num_nights)}
+            field_ids = {f'night-{i}': [] for i in range(num_nights)}
+            bin_nums = {f'night-{i}': [] for i in range(num_nights)}
 
+            i = 0
+            reward = 0
+            night_idx = 0
             while not (terminated or truncated):
                 with torch.no_grad():
+                    observations[f'night-{night_idx}'].append(obs)
+                    rewards[f'night-{night_idx}'].append(reward)
+                    timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
+                    field_ids[f'night-{night_idx}'].append(info.get('field_id'))
+                    bin_nums[f'night-{night_idx}'].append(info.get('bin'))
+
                     action_mask = info.get('action_mask', None)
-                    action = self.act(obs, action_mask, epsilon=None)  # greedy
+                    action = self.act(obs, action_mask, epsilon=None)
                     field_id = self.choose_field(obs, action, info, field2nvisits, field2radec, bin2fields_in_bin, hpGrid, field_choice_method)
-                    obs, reward, terminated, truncated, info = env.step((action, field_id))
-                    obs_list.append(obs)
-                    rewards_list.append(reward)
+
+                    actions = np.array([action, field_id], dtype=np.int32)
+                    obs, reward, terminated, truncated, info = env.step(actions)
                     episode_reward += reward
-                    timestamps_list.append(env.unwrapped._timestamp)
-                    field_ids_list.append(env.unwrapped._field_id)
-                    bin_nums_list.append(env.unwrapped._bin_num)
+                    night_idx = info.get('night_idx')
                     i += 1
-            print(f'terminated at {i}')
-            observations.update({f'ep-{episode}': np.array(obs_list)})
-            rewards.update({f'ep-{episode}': np.array(rewards_list)})
-            timestamps.update({f'ep-{episode}': np.array(timestamps_list)})
-            field_ids.update({f'ep-{episode}': np.array(field_ids_list)})
-            bin_nums.update({f'ep-{episode}': np.array(bin_nums_list)})
+            for night_idx in range(num_nights):
+                observations[f'night-{night_idx}'] = np.array(observations[f'night-{night_idx}'])
+                rewards[f'night-{night_idx}'] = np.array(rewards[f'night-{night_idx}'])
+                timestamps[f'night-{night_idx}'] = np.array(timestamps[f'night-{night_idx}'])
+                field_ids[f'night-{night_idx}'] = np.array(field_ids[f'night-{night_idx}'])
+                bin_nums[f'night-{night_idx}'] = np.array(bin_nums[f'night-{night_idx}'])
+            eval_metrics.update({f'ep-{episode}': {
+                'observations': observations,
+                'rewards': rewards,
+                'timestamp': timestamps,
+                'field_id': field_ids,
+                'bin': bin_nums
+            }})
+
             episode_rewards.append(episode_reward)
+            print(f'terminated at {i}')
 
         eval_metrics.update({
             'mean_reward': np.mean(episode_rewards),
@@ -230,16 +241,11 @@ class Agent:
             'min_reward': np.min(episode_rewards),
             'max_reward': np.max(episode_rewards),
             'episode_rewards': episode_rewards,
-            'observations': observations,
-            'rewards': rewards,
-            'timestamps': timestamps,
-            'field_id': field_ids,
-            'bin': bin_nums
         })
 
-        with open(self.outdir + 'eval_metrics.pkl', 'wb') as handle:
+        with open(eval_outdir + 'eval_metrics.pkl', 'wb') as handle:
             pickle.dump(eval_metrics, handle)
-            print(f'eval_metrics.pkl saved in {self.outdir}')
+            print(f'eval_metrics.pkl saved in {eval_outdir}')
 
     def act(self, obs, action_mask, epsilon):
         """Selects an action using the underlying algorithm.

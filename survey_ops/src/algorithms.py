@@ -43,7 +43,7 @@ class DDQN(AlgorithmBase):
     """
 
     def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
-                 use_lr_scheduler=False, num_steps=None, **optimizer_kwargs):
+                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, num_steps=None, **optimizer_kwargs):
         super().__init__()
         self.name = 'DDQN'
         self.gamma = gamma
@@ -56,12 +56,10 @@ class DDQN(AlgorithmBase):
         self.use_double = use_double
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=False, **optimizer_kwargs)
-        self.use_lr_scheduler = use_lr_scheduler
 
-        # TODO: I want to input number of epochs for num_steps for cosine annealing T_max param
-        if use_lr_scheduler:
-            lr_scheduler_kwargs = {'T_max': num_steps if num_steps is not None else 100_000, 'eta_min': 1e-6}
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs)
+        if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
+            assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
+        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
         self.loss_fxn = F.mse_loss if loss_fxn is None else loss_fxn
 
     def train_step(self, batch):
@@ -156,13 +154,18 @@ class DDQN(AlgorithmBase):
     
 
 class BehaviorCloning(AlgorithmBase):
-    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, device='cpu'):
+    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, device='cpu'):
         self.name = 'BehaviorCloning'
         self.device = device
         self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.loss_fxn = torch.nn.CrossEntropyLoss(reduction='mean') if loss_fxn is None else loss_fxn
-        self.lr_scheduler = None
+        if loss_fxn is None or loss_fxn == 'cross_entropy':
+            self.loss_fxn = torch.nn.CrossEntropyLoss(reduction='mean')
+        else:
+            self.loss_fxn = loss_fxn
+        if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
+            assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
+        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
         
     def train_step(self, batch):
         """

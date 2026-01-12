@@ -3,6 +3,8 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler
 from collections import defaultdict
 
+from tqdm import tqdm
+
 from survey_ops.utils import units
 from survey_ops.utils import ephemerides
 import healpy as hp
@@ -10,6 +12,7 @@ import healpy as hp
 import pandas as pd
 import json
 import os
+import time
 
 import astropy
 
@@ -87,12 +90,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         # Set up normalization decisions
         self.do_z_score_norm = False #do_z_score_norm
-        self.z_score_feature_names = []
         self.do_cyclical_norm = do_cyclical_norm
+        self.do_max_norm = do_max_norm
+        self.do_inverse_airmass = do_inverse_airmass
+
+        self.z_score_feature_names = []
         self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
-        self.do_max_norm = True
         self.max_norm_feature_names = ['dec', 'el'] if self.do_max_norm else []
-        self.do_inverse_airmass = True
 
         # Include additional features not in default features above
         pointing_feature_names = required_point_features + additional_pointing_features
@@ -163,7 +167,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Set dimension of observation
         self.obs_dim = self.states.shape[-1]
 
-        # Normalize states
+        # Normalize states and next_states
         self._do_noncyclic_normalizations()
 
     def __len__(self):
@@ -194,6 +198,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _do_noncyclic_normalizations(self):
         """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
         if self.do_inverse_airmass:
+            
             airmass_mask = torch.tensor(np.array(['airmass' in feat_name for feat_name in self.state_feature_names]), dtype=torch.bool)
             self.states[:, airmass_mask] = 1.0 / self.states[:, airmass_mask]
             self.next_states[:, airmass_mask] = 1.0
@@ -301,7 +306,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         df = df.sort_values(by='timestamp')
 
         # Get time dependent features
-        for idx, time in zip(df.index, timestamps):
+        for idx, time in tqdm(zip(df.index, timestamps), total=len(timestamps), desc='Calculating sun and moon ra/dec and az/el'):
             sun_ra, sun_dec = ephemerides.get_source_ra_dec('sun', time=time)
             df.loc[idx, ['sun_ra', 'sun_dec']] = sun_ra, sun_dec
             df.loc[idx, ['sun_az', 'sun_el']] = ephemerides.equatorial_to_topographic(ra=sun_ra, dec=sun_dec, time=time)
@@ -403,7 +408,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         pos2 = np.empty_like(hour_angles)
 
         lon, lat = self.hpGrid.lon, self.hpGrid.lat
-        for i, time in enumerate(timestamps):
+        for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating bin features for all healpix bins and timestamps'):
             hour_angles[i] = self.hpGrid.get_hour_angle(time=time)
             airmasses[i] = self.hpGrid.get_airmass(time)
             moon_dists[i] = self.hpGrid.get_source_angular_separations('moon', time=time)
@@ -510,7 +515,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
     def _construct_rewards(self, df):
         """Constructs rewards for all transitions. Reward is defined as teff, normalized to [0, 1]."""
-        rewards = df['teff'].values
+        rewards = df['teff'].values.copy()
         rewards -= np.min(rewards)
         rewards /= np.max(rewards)
         return rewards
@@ -525,7 +530,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         zenith_rows = []
         nights = original_df.night.unique()
-        for i_row, time in enumerate(timestamps):
+        for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating zenith states'):
             row_dict = {}
             row_dict['timestamp'] = time
             row_dict['night'] = nights[i_row]
@@ -553,9 +558,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
                 zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
-        for feat_name in original_df.columns:
-            if feat_name not in zenith_df.columns:
-                zenith_df[feat_name] = np.nan
+        # for feat_name in original_df.columns:
+        #     if feat_name not in zenith_df.columns:
+        #         zenith_df[feat_name] = np.nan
 
         # zenith_pointing_features = zenith_df[self.pointing_feature_names].to_numpy()
         return zenith_df
@@ -571,7 +576,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             ),
             drop_last=True, # drops last non-full batch
             num_workers=num_workers,
-            pin_memory=pin_memory
+            pin_memory=pin_memory,
         )
         return loader
 
