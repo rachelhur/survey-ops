@@ -10,6 +10,10 @@ import pickle
 import random
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
+import logging
+
+# Get the logger associated with this module's name (e.g., 'my_module')
+logger = logging.getLogger(__name__)
 
 class Agent:
     """
@@ -90,6 +94,7 @@ class Agent:
 
         save_filepath = self.train_outdir + 'best_weights.pt'
         train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
+        self.algorithm.policy_net.train()
 
         if dataloader is not None:
             # TODO for v0 only - remove when model is updated for release
@@ -129,25 +134,17 @@ class Agent:
                     else:
                         # --- old method fallback ---
                         eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
-                    
-                    # Test on a batch
-                    eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
-                    expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
-                    
-                    all_q_vals = self.algorithm.policy_net(eval_obs)
-                    if self.algorithm.name != 'BehaviorCloning':
-                        all_q_vals[~action_masks] = float('-inf')
-                    
-                    eval_loss = self.algorithm.loss_fxn(all_q_vals, expert_actions)
-                    predicted_actions = all_q_vals.argmax(dim=1)
-                    accuracy = (predicted_actions == expert_actions).float().mean()
+
+                    eval_loss, q_vals, accuracy = self.algorithm.test_step(eval_batch)
                     train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())
-                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={all_q_vals.mean().item():.3f}")
+                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
+                    
                     if eval_loss < best_val_loss:
                         best_val_loss = eval_loss
                         self.save(save_filepath)
                         with open(train_metrics_filepath, 'wb') as handle:
                             pickle.dump(train_metrics, handle)
+
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
     

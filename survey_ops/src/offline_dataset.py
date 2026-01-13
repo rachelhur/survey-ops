@@ -126,7 +126,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self._df = df # Save for diagnostics
 
         # Set dataset-wide (across observation nights) attributes
-        self.num_transitions = len(df) # size of dataset
         if binning_method == 'uniform_grid':
             self.num_actions = int(num_bins_1d**2)
         elif binning_method == 'healpix':
@@ -150,6 +149,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.np_states, self.np_next_states = states, next_states
         actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
         rewards = self._construct_rewards(df)
+
+        self.num_transitions = states.shape[0]
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
         self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
         dones[self._done_indices] = True
@@ -360,7 +361,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         zenith_df = self._get_zenith_states(original_df=df, timestamps=zenith_timestamps)
         df = pd.concat([df, zenith_df], ignore_index=True)
         df = df.sort_values(by='timestamp')
-        # "States" require inserting the "zenith state" before first observation of each night, and deleting last observation
 
         # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
@@ -381,48 +381,34 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
         next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
 
-        # # "Next States" are just all observations
-        # next_pointing_features = pointing_features.copy()
-        
-        # # "States" require inserting the "zenith state" before first observation of each night, and deleting last observation
-        # _df = df.reset_index(drop=True, inplace=False)
-        # night_end_indices = _df.groupby('night').tail(1).index # - df.head(1).index
-
-        # # Calculate zenith states
-        # zenith_timestamps = _df.groupby('night').head(1).timestamp - 10
-
-        # zenith_states = self._get_zenith_states(timestamps=zenith_timestamps, original_df_columns=['asdf'])
-        # pointing_features[night_end_indices[:-1]] = zenith_states[1:] # Replace last observation of each night with zenith states[1:], except last observation of entire dataset
-        # pointing_features = pointing_features[:-1, :] # remove last observation of entire dataset
-        # # insert zenith_states[0] in front of first observation
-        # pointing_features = np.vstack([zenith_states[0], pointing_features])
- 
         return pointing_features, next_pointing_features
         
-    def _get_bin_features(self, bin_feature_names, timestamps, datetimes):
+    def _construct_bin_features(self, bin_feature_names, timestamps, datetimes):
+        # Get values from timestamp pandas.Series
         timestamps = timestamps.values
+
+        # Create empty arrays 
         hour_angles = np.empty(shape=(len(timestamps), self.hpGrid.npix))
         airmasses = np.empty_like(hour_angles)
         moon_dists = np.empty_like(hour_angles)
-        pos1 = np.empty_like(hour_angles) # pos = (az, el) if actions are in ra, dec
-        pos2 = np.empty_like(hour_angles)
+        xs = np.empty_like(hour_angles) # xs = az if actions are in ra, dec
+        ys = np.empty_like(hour_angles) # ys = dec if actions are in az, el
 
         lon, lat = self.hpGrid.lon, self.hpGrid.lat
         for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating bin features for all healpix bins and timestamps'):
             hour_angles[i] = self.hpGrid.get_hour_angle(time=time)
             airmasses[i] = self.hpGrid.get_airmass(time)
             moon_dists[i] = self.hpGrid.get_source_angular_separations('moon', time=time)
-            if not self.hpGrid.is_azel:
-                pos1[i], pos2[i] = ephemerides.equatorial_to_topographic(lon, lat, time=time)
+            if self.hpGrid.is_azel:
+                xs[i], ys[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
             else:
-                pos1[i], pos2[i] = ephemerides.topographic_to_equatorial(lon, lat, time=time)
-                raise NotImplementedError                
-        
-        stacked = np.stack([hour_angles, airmasses, moon_dists, pos1, pos2], axis=2)
+                xs[i], ys[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
+        stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys], axis=2)
         bin_states = stacked.reshape(len(hour_angles), -1)
 
         bin_df = pd.DataFrame(data=bin_states, columns=bin_feature_names)
-        bin_df['night'] = (datetimes- pd.Timedelta(hours=12)).dt.normalize()
+        bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
+        bin_df['timestamp'] = timestamps
 
         # Normalize periodic features here and add as df cols
         new_cols = {}
@@ -431,41 +417,36 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
                     new_cols[f'{feat_name}_cos'] = np.cos(bin_df[feat_name].values)
                     new_cols[f'{feat_name}_sin'] = np.sin(bin_df[feat_name].values)
-
-                    # bin_df[f'{feat_name}_cos'] = np.cos(bin_df[feat_name].values)
-                    # bin_df[f'{feat_name}_sin'] = np.sin(bin_df[feat_name].values)
+                    
         new_cols_df = pd.DataFrame(data=new_cols)
         bin_df = pd.concat([bin_df, new_cols_df], axis=1)
 
+        bin_df = bin_df.reset_index(drop=True, inplace=False)
+        zenith_timestamps = bin_df.groupby('night').head(1).timestamp - 10
+        zenith_df = self._get_zenith_states(original_df=bin_df, timestamps=zenith_timestamps, is_pointing=False)
+        bin_df = pd.concat([bin_df, zenith_df], ignore_index=True)
+        bin_df = bin_df.sort_values(by='timestamp')
+        
+        # Pointing features already in DECam data
+        missing_cols = set(self.bin_feature_names) - set(bin_df.columns) == 0
+        assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. These are not yet implemented in method self._get_bin_features()'
+
+        # Get bin_features and next_bin_features
+        bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+        next_bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
 
         # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
             cols = bin_df.select_dtypes(include=[str_bit]).columns
             bin_df[cols] = bin_df[cols].astype(np_bit)
+
         self._bin_df = bin_df
-
-        # Pointing features already in DECam data
-        missing_cols = set(self.bin_feature_names) - set(bin_df.columns) == 0
-        assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be added in method self._get_bin_features()'
-        bin_features = bin_df[self.bin_feature_names].to_numpy()
-
-        # "Next States" are just all observations
-        next_bin_features = bin_features.copy()
-        
-        # "States" require inserting rows of 0's before first observation of each night, and deleting last observation
-        night_end_indices = bin_df.groupby('night').tail(1).index - bin_df.head(1).index
-
-        bin_features[night_end_indices[:-1]] = 0 # Replace last observation of each night with 0's, except last observation of entire self
-        bin_features = bin_features[:-1, :] # remove last observation of entire self
-        zenith_row = np.zeros_like(bin_features[0]) # insert row of 0s in front of first observation
-        bin_features = np.vstack([zenith_row, bin_features])
-
         return bin_features, next_bin_features
     
     def _construct_states(self, df, include_bin_features, bin_feature_names):
         pointing_features, next_pointing_features = self._construct_pointing_features(df=df)
         if include_bin_features:
-            bin_features, next_bin_features = self._get_bin_features(bin_feature_names=bin_feature_names, timestamps=df['timestamp'], datetimes=df['datetime'])
+            bin_features, next_bin_features = self._construct_bin_features(bin_feature_names=bin_feature_names, timestamps=df['timestamp'], datetimes=df['datetime'])
             self.bin_features = bin_features
             self.next_bin_features = next_bin_features
             states = np.concatenate((pointing_features, bin_features), axis=1)
@@ -479,11 +460,11 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         if binning_method == 'healpix':
             if self.hpGrid.is_azel:
-                lon, lat = df.az.values, df.el.values
+                lonlat_no_zen = df.groupby('night').tail(-1)[['az', 'el']].values
             else:
                 # lon, lat = df.ra.values, df.dec.values
-                radec_no_zen = df.groupby('night').tail(-1)[['ra', 'dec']].values
-            indices = self.hpGrid.ang2idx(lon=radec_no_zen[:, 0], lat=radec_no_zen[:, 1])
+                lonlat_no_zen = df.groupby('night').tail(-1)[['ra', 'dec']].values
+            indices = self.hpGrid.ang2idx(lon=lonlat_no_zen[:, 0], lat=lonlat_no_zen[:, 1])
             return indices
         
         elif binning_method == 'uniform_grid' and bin_space == 'azel':
@@ -515,54 +496,72 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
     def _construct_rewards(self, df):
         """Constructs rewards for all transitions. Reward is defined as teff, normalized to [0, 1]."""
-        rewards = df['teff'].values.copy()
-        rewards -= np.min(rewards)
-        rewards /= np.max(rewards)
+        teff_no_zen = df.groupby('night').tail(-1)[['teff']].values[:, 0]
+        min_teff = np.min(teff_no_zen)
+        max_teff = np.max(teff_no_zen)
+        rewards = (teff_no_zen - min_teff)/max_teff
         return rewards
 
     def _construct_action_masks(self, timestamps=None):
         # given timestamp, determine bins which are outside of observable range
         return np.ones((self.num_transitions, self.num_actions), dtype=bool)
 
-    def _get_zenith_states(self, original_df, timestamps):
+    def _get_zenith_states(self, original_df, timestamps, is_pointing=True):
         LSTs = get_lst(timestamps)
         blanco_lat = -0.5265599205997796 # rad
 
         zenith_rows = []
         nights = original_df.night.unique()
-        for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating zenith states'):
-            row_dict = {}
-            row_dict['timestamp'] = time
-            row_dict['night'] = nights[i_row]
-            row_dict['ra'] = LSTs[i_row]
-            row_dict['sun_ra'], row_dict['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=time)
-            row_dict['moon_ra'], row_dict['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=time)
-            row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'])
-            row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'])
-            total_time_in_night = original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[-1] - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]
-            row_dict['time_fraction_since_start'] = (time - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]) / total_time_in_night if total_time_in_night > 0 else 0
-            row_dict['bin'] = self.hpGrid.ang2idx(lon=row_dict['ra'], lat=blanco_lat)
-            zenith_rows.append(row_dict)
+        if is_pointing:
+            for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating zenith states'):
+                row_dict = {}
+                row_dict['timestamp'] = time
+                row_dict['night'] = nights[i_row]
+                row_dict['ra'] = LSTs[i_row]
+                row_dict['sun_ra'], row_dict['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=time)
+                row_dict['moon_ra'], row_dict['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=time)
+                row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'])
+                row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'])
+                total_time_in_night = original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[-1] - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]
+                row_dict['time_fraction_since_start'] = (time - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]) / total_time_in_night if total_time_in_night > 0 else 0
+                row_dict['bin'] = self.hpGrid.ang2idx(lon=row_dict['ra'], lat=blanco_lat)
+                zenith_rows.append(row_dict)
 
-        zenith_df = pd.DataFrame(zenith_rows)
-        zenith_df['dec'] = blanco_lat
-        zenith_df['az'] = 0
-        zenith_df['el'] = np.pi/2
-        zenith_df['airmass'] = 1
-        zenith_df['ha'] = 0
-        zenith_df['object'] = 'zenith'
-        zenith_df['field_id'] = -1
-        original_df
-        for feat_name in self.base_pointing_feature_names:
-            if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
-                zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
-                zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
+            zenith_df = pd.DataFrame(zenith_rows)
+            zenith_df['dec'] = blanco_lat
+            zenith_df['az'] = 0
+            zenith_df['el'] = np.pi/2
+            zenith_df['airmass'] = 1
+            zenith_df['ha'] = 0
+            zenith_df['object'] = 'zenith'
+            zenith_df['field_id'] = -1
 
-        # for feat_name in original_df.columns:
-        #     if feat_name not in zenith_df.columns:
-        #         zenith_df[feat_name] = np.nan
+            for feat_name in self.base_pointing_feature_names:
+                if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
+                    zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
+                    zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
-        # zenith_pointing_features = zenith_df[self.pointing_feature_names].to_numpy()
+        else: # ['ha', 'airmass', 'ang_dist_to_moon']
+            for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating grid-wide zenith states'):
+                row_dict = {}
+                row_dict['time'] = time
+                row_dict['night'] = nights[i_row]
+                row_dict['ha'] = self.hpGrid.get_hour_angle(time=time)
+                row_dict['airmass'] = self.hpGrid.get_airmass(time)
+                row_dict['ang_dist_to_moon'] = self.hpGrid.get_source_angular_separations('moon', time=time)
+                if self.hpGrid.is_azel:
+                    row_dict['xs'], row_dict['ys'] = ephemerides.topographic_to_equatorial(az=self.hpGrid.lon, el=self.hpGrid.lat, time=time)
+                else:
+                    row_dict['xs'], row_dict['ys'] = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat, time=time)
+                zenith_rows.append(row_dict)
+
+            zenith_df = pd.DataFrame(zenith_rows)
+            
+            for feat_name in self.base_bin_feature_names:
+                if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
+                    zenith_df[f'{feat_name}_cos'] = np.cos(zenith_df[feat_name].values)
+                    zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
+
         return zenith_df
     
     def get_dataloader(self, batch_size, num_workers, pin_memory):

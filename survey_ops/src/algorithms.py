@@ -6,6 +6,9 @@ import torch.nn.functional as F
 
 from survey_ops.src.neural_nets import DQN
 from survey_ops.utils.interpolate import interpolate_on_sphere
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AlgorithmBase:
     def __init__(self):
@@ -42,8 +45,8 @@ class DDQN(AlgorithmBase):
     optimizer_kwargs (optional): 
     """
 
-    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, loss_fxn, use_double=True, \
-                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, num_steps=None, **optimizer_kwargs):
+    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, loss_fxn=None, use_double=True, \
+                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={}):
         super().__init__()
         self.name = 'DDQN'
         self.gamma = gamma
@@ -60,10 +63,9 @@ class DDQN(AlgorithmBase):
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
-        self.loss_fxn = F.mse_loss if loss_fxn is None else loss_fxn
+        self.loss_fxn = loss_fxn
 
     def train_step(self, batch):
-        
         obs, actions, rewards, next_obs, dones, action_masks = batch
         if not torch.is_tensor(obs):
             obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
@@ -86,7 +88,7 @@ class DDQN(AlgorithmBase):
         if obs.dim() == 1:
             obs = obs.unsqueeze(1)
             next_obs = next_obs.unsqueeze(1)
-    
+        
         # get policy q vals for current state
         all_q_vals = self.policy_net(obs)
         current_q = all_q_vals.gather(1, actions).squeeze()
@@ -117,12 +119,11 @@ class DDQN(AlgorithmBase):
         for name, param in self.policy_net.named_parameters():
             if param.grad is not None:
                 if torch.isnan(param.grad).any():
-                    print(f"NaN gradient in {name}")
-        prev_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.)
+                    logger.debug(f"NaN gradient in {name}")
         # print(f"Max Gradient Norm: {prev_grad_norm.item()}")
         self.optimizer.step()
-        if self.use_lr_scheduler:
-            self.scheduler.step()
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
                     
         self._soft_update()
 
@@ -152,6 +153,35 @@ class DDQN(AlgorithmBase):
             action = torch.argmax(q_values).item()
         return int(action)
     
+    def test_step(self, eval_batch):
+        obs, actions, rewards, next_obs, dones, action_masks = eval_batch
+
+        with torch.no_grad():      
+            # convert to tensors
+            obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+            actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
+            rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+            next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
+            dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
+            action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
+
+            
+        return
+                    # # # Test on a batch
+                    # eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
+                    # expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
+                    
+                    # all_q_vals = self.algorithm.policy_net(eval_obs)
+                    # if self.algorithm.name != 'BehaviorCloning':
+                    #     all_q_vals[~action_masks] = float('-inf')
+                    # q_vals = all_q_vals.mean().item()
+                    
+                    # eval_loss = self.algorithm.loss_fxn(all_q_vals, expert_actions)
+                    # predicted_actions = all_q_vals.argmax(dim=1)
+
+                    # if self.algorithm.name != 'BehaviorCloning':
+                    #     all_q_vals[~action_masks] = float('-inf')
+    
 
 class BehaviorCloning(AlgorithmBase):
     def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, device='cpu'):
@@ -159,10 +189,7 @@ class BehaviorCloning(AlgorithmBase):
         self.device = device
         self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
-        if loss_fxn is None or loss_fxn == 'cross_entropy':
-            self.loss_fxn = torch.nn.CrossEntropyLoss(reduction='mean')
-        else:
-            self.loss_fxn = loss_fxn
+        self.loss_fxn = loss_fxn
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
@@ -188,27 +215,29 @@ class BehaviorCloning(AlgorithmBase):
         loss = self.loss_fxn(action_logits, expert_actions)
 
         # Backward pass
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
 
         return loss.item(), action_logits.mean().item()
     
-    # def test_step(self, batch):
-    #     obs, expert_actions, rewards, next_obs, dones, action_masks = batch
+    def test_step(self, batch):
+        eval_obs, expert_actions, rewards, next_obs, dones, action_masks = batch
 
-    #     with torch.no_grad:      
-    #         # convert to tensors
-    #         if not torch.is_tensor(obs):
-    #             obs = torch.tensor(np.array(obs), dtype=torch.float32)
-    #             expert_actions = torch.tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
-    #         obs = obs.to(device=self.device, dtype=torch.float32)
-    #         expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
-    #         action_logits = self.policy_net(obs)
+        with torch.no_grad():      
+            # convert to tensors
+            eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
+            expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
             
-    #         loss = self.loss_fxn(action_logits, expert_actions)
+            action_logits = self.policy_net(eval_obs)
+            predicted_actions = action_logits.argmax(dim=1)
+            loss = self.loss_fxn(action_logits, expert_actions)
 
-    #     return loss.item(), action_logits.mean().item()
+            accuracy = (predicted_actions == expert_actions).float().mean()
+            
+        return loss, action_logits.mean(), accuracy
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
@@ -222,7 +251,6 @@ class BehaviorCloning(AlgorithmBase):
             action_logits[~mask] = float('-inf')
             action = torch.argmax(action_logits, dim=1)
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
-
 
     # def predict(self, state):
     #     """

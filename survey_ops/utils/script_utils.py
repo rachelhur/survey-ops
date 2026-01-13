@@ -21,7 +21,6 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
         'lr': lr,
         'lr_scheduler': lr_scheduler,
         'lr_scheduler_kwargs': lr_scheduler_kwargs,
-        'loss_fxn': loss_fxn
     }
 
     if algorithm_name == 'ddqn' or algorithm_name == 'dqn':
@@ -33,11 +32,14 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
             loss_fxn = nn.MSELoss(reduction='mean')
         elif loss_fxn == 'huber':
             loss_fxn = nn.HuberLoss()
+        else:
+            raise NotImplementedError
 
         model_hyperparams .update( {
             'gamma': gamma,
             'tau': tau,
             'use_double': algorithm_name == 'ddqn',
+            'loss_fxn': loss_fxn
         } )
 
         algorithm = DDQN(
@@ -51,17 +53,23 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
             loss_fxn = nn.CrossEntropyLoss(reduction='mean')
         elif loss_fxn == 'mse':
             loss_fxn = nn.MSELoss(reduction='mean')
+        else:
+            raise NotImplementedError
 
+        model_hyperparams.update({
+        'loss_fxn': loss_fxn
+        })
         algorithm = BehaviorCloning(
             device=device,
             **model_hyperparams
         )
+    else:
+        raise NotImplementedError
 
     if save_dir is not None:
         model_hyperparams['algorithm_name'] = algorithm_name
         with open(save_dir + 'model_hyperparams.pkl', 'wb') as f:
             pickle.dump(model_hyperparams, f)
-
     return algorithm
 
 
@@ -109,7 +117,7 @@ def load_raw_data_to_dataframe(fits_path, json_path):
         df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
     return df
 
-def get_offline_dataset(df, binning_method, nside, bin_space, specific_years, specific_months, specific_days, no_bin_features, no_cyclical_norm, no_max_norm, no_inverse_airmass, include_default_features=True):
+def get_offline_dataset(df, binning_method, nside, bin_space, specific_years, specific_months, specific_days, include_bin_features, do_cyclical_norm, do_max_norm, do_inverse_airmass, include_default_features=True):
     dataset =  OfflineDECamDataset(
         df, 
         binning_method=binning_method,
@@ -119,9 +127,45 @@ def get_offline_dataset(df, binning_method, nside, bin_space, specific_years, sp
         specific_months=specific_months,
         specific_days=specific_days,
         include_default_features=include_default_features,
-        include_bin_features=not no_bin_features,
-        do_cyclical_norm=not no_cyclical_norm,
-        do_max_norm=not no_max_norm,
-        do_inverse_airmass=not no_inverse_airmass
+        include_bin_features=include_bin_features,
+        do_cyclical_norm=do_cyclical_norm,
+        do_max_norm=do_max_norm,
+        do_inverse_airmass=do_inverse_airmass
     )
     return dataset
+
+def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
+    # Save timestamps, field_ids, and bin numbers
+    _timestamps = eval_metrics['ep-0']['timestamp'] \
+                if len(eval_metrics['ep-0']['timestamp']) > len(pd_group['timestamp']) \
+                else pd_group['timestamp'] 
+    eval_field_schedule = {
+        'time': _timestamps,
+        'field_id': eval_metrics['ep-0']['field_id']
+    }
+    
+    expert_field_schedule = {
+        'time': _timestamps,
+        'field_id': pd_group['field_id'].values
+    }
+    
+    bin_schedule = {
+        'time': _timestamps,
+        'policy_bin_id': eval_metrics['ep-0']['bin'].astype(np.int32),
+        'bin_id': pd_group['bin'].values
+    }
+    
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    for data, filename in zip(
+        [expert_field_schedule, eval_field_schedule, bin_schedule],
+        ['expert_field_schedule.csv', 'new_field_schedule.csv', 'bin_schedule.csv']
+        ):
+        series_data = {key: pd.Series(value) for key, value in data.items()}
+        _df = pd.DataFrame(series_data)
+        if 'bin' in filename:
+            _df['policy_bin_id'] = _df['policy_bin_id'].fillna(0).astype('Int64')
+            _df['bin_id'] = _df['bin_id'].fillna(0).astype('Int64')
+        output_filepath = outdir + f'_{date_str}' + filename
+        with open(output_filepath, 'w') as f:
+            _df.to_csv(f, index=False)

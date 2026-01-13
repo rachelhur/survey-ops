@@ -50,18 +50,18 @@ def main():
     parser.add_argument('--specific_months', type=int, nargs='*', default=None, help='Specific months to include in the dataset')
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
     # parser.add_argument('--include_default_features', action='store_true', help='Whether to include default features in the dataset')
-    parser.add_argument('--no_bin_features', action='store_false', help='Whether to include bin features in the dataset')
+    parser.add_argument('--include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
     # parser.add_argument('--do_z_score_norm', action='store_true', help='Whether to apply z-score normalization to the features')
-    parser.add_argument('--no_cyclical_norm', action='store_false', help='Whether to apply cyclical normalization to the features')
-    parser.add_argument('--no_max_norm', action='store_false', help='Whether to apply max normalization to the features')
-    parser.add_argument('--no_inverse_airmass', action='store_false', help='Whether to include inverse airmass as a feature')
+    parser.add_argument('--do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
+    parser.add_argument('--do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
+    parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
 
     # Training hyperparameters
     parser.add_argument('--num_epochs', type=float, default=10, help='Number of iterations through dataset during training')
     parser.add_argument('--batch_size', type=int, default=1024, help='Training batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default='cosine_annealing', help='Learning rate scheduler type')
+    parser.add_argument('--lr_scheduler', type=str, default='cosine_annealing', help='cosine_annealing or None')
     parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
     parser.add_argument('--eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
     parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (in epochs)')
@@ -112,16 +112,16 @@ def main():
         specific_years=args.specific_years, 
         specific_months=args.specific_months, 
         specific_days=args.specific_days, 
-        no_bin_features=args.no_bin_features, 
-        no_cyclical_norm=args.no_cyclical_norm, 
-        no_max_norm=args.no_max_norm, 
-        no_inverse_airmass=args.no_inverse_airmass
+        include_bin_features=args.include_bin_features, 
+        do_cyclical_norm=args.do_cyclical_norm, 
+        do_max_norm=args.do_max_norm, 
+        do_inverse_airmass=args.do_inverse_airmass
         )
     
     colors = [f'C{i}' for i in range(7)]
     for i, (bin_id, g) in enumerate(train_dataset._df.groupby('bin')):
         plt.scatter(g.ra, g.dec, label=bin_id, color=colors[i%len(colors)], s=1)
-    plt.savefig(fig_outdir + 'train_data_decvsra.png')
+    plt.savefig(fig_outdir + 'train_data_dec_vs_ra.png')
 
     # Save these args for test data arguments in eval.py
     OFFLINE_DATASET_CONFIG = {
@@ -129,11 +129,12 @@ def main():
         'nside': args.nside,
         'bin_space': args.bin_space,
         'include_default_features': True,
-        'no_bin_features': args.no_bin_features,
-        'no_cyclical_norm': args.no_cyclical_norm,
-        'no_max_norm': args.no_max_norm,
-        'no_inverse_airmass': args.no_inverse_airmass
+        'include_bin_features': args.include_bin_features,
+        'do_cyclical_norm': args.do_cyclical_norm,
+        'do_max_norm': args.do_max_norm,
+        'do_inverse_airmass': args.do_inverse_airmass
     }
+    
     logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')
 
     with open(results_outdir + 'offline_dataset_config.pkl', 'wb') as f:
