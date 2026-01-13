@@ -446,7 +446,7 @@ def plot_bins(
             assert int(idx) == hpgrid.ang2idx(lon=lon, lat=lat)
 
     # plot the healpix grid lines
-    ra, dec = hpgrid.get_pixel_boundaries(step=10)
+    ra, dec = hpgrid.get_pixel_boundaries(step=2)
     if is_azel:
         ra, dec = ephemerides.topographic_to_equatorial(
             az=ra, el=dec, observer=observer
