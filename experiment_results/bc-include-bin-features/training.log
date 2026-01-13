@@ -1,0 +1,37 @@
+2026-01-12 20:39:33 - INFO - Saving results in ../experiment_results/bc-include-bin-features/
+2026-01-12 20:39:33 - INFO - Experiment parameters:
+2026-01-12 20:39:33 - INFO - seed: 10
+2026-01-12 20:39:33 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-01-12 20:39:33 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-01-12 20:39:33 - INFO - parent_results_dir: ../experiment_results/
+2026-01-12 20:39:33 - INFO - exp_name: bc-include-bin-features
+2026-01-12 20:39:33 - INFO - binning_method: healpix
+2026-01-12 20:39:33 - INFO - nside: 16
+2026-01-12 20:39:33 - INFO - bin_space: radec
+2026-01-12 20:39:33 - INFO - specific_years: [2017]
+2026-01-12 20:39:33 - INFO - specific_months: [12]
+2026-01-12 20:39:33 - INFO - specific_days: None
+2026-01-12 20:39:33 - INFO - include_bin_features: True
+2026-01-12 20:39:33 - INFO - do_cyclical_norm: True
+2026-01-12 20:39:33 - INFO - do_max_norm: True
+2026-01-12 20:39:33 - INFO - do_inverse_airmass: True
+2026-01-12 20:39:33 - INFO - num_epochs: 3.0
+2026-01-12 20:39:33 - INFO - batch_size: 1024
+2026-01-12 20:39:33 - INFO - num_workers: 4
+2026-01-12 20:39:33 - INFO - lr: 0.0007
+2026-01-12 20:39:33 - INFO - lr_scheduler: None
+2026-01-12 20:39:33 - INFO - hidden_dim: 4096
+2026-01-12 20:39:33 - INFO - eta_min: 1e-05
+2026-01-12 20:39:33 - INFO - patience: 10
+2026-01-12 20:39:33 - INFO - algorithm_name: behavior_cloning
+2026-01-12 20:39:33 - INFO - loss_function: cross_entropy
+2026-01-12 20:39:33 - INFO - tau: 0.005
+2026-01-12 20:39:33 - INFO - gamma: 0.99
+2026-01-12 20:39:33 - INFO - Loading raw data...
+2026-01-12 20:39:33 - INFO - Processing raw data into OfflineDataset()...
+2026-01-12 20:40:03 - DEBUG - Offline dataset config: {'binning_method': 'healpix', 'nside': 16, 'bin_space': 'radec', 'include_default_features': True, 'include_bin_features': True, 'do_cyclical_norm': True, 'do_max_norm': True, 'do_inverse_airmass': True}
+2026-01-12 20:40:03 - INFO - Initializing agent...
+2026-01-12 20:40:04 - INFO - Starting training...
+2026-01-12 20:48:38 - INFO - Total train time = 513.7394118309021s on cuda
+2026-01-12 20:48:38 - INFO - Training complete.
+2026-01-12 20:48:38 - INFO - Plotting training loss curve...
