@@ -11,3 +11,4 @@ __pycache__/
 *.zip
 *.gz
 *.pkl
+*.pt
