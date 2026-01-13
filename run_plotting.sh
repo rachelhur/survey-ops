@@ -1,7 +1,8 @@
 #!/bin/bash
 current_dir=$(pwd)
-result_dir="evaluation_1/2018-12-1/"
+result_dir = "./results/v2f-environment-testing/"
 nside=16
+# result_dir23423="evaluation_1/2018-12-1/"
 
 # original command -- test
 # python /home/rachel/Projects/survey-ops/survey_ops/plotting.py -o my_test_schedule.gif -f /home/rachel/Projects/survey-ops/data/fields2radec.json -s /home/rachel/Projects/survey-ops/data/true_schedule.csv
@@ -15,4 +16,5 @@ nside=16
 # python $current_dir/plotting.py -o $current_dir/results/v2f-environment-testing/eval_field_schedule.gif -f $current_dir/data/field2radec.json -s $current_dir/results/v2f-environment-testing/eval_schedule.csv
 # plot bins:
 echo "Creating bin schedule gif"
-python "$current_dir/survey_ops/plotting_alt.py" -f "$current_dir/data/nside${nside}_bin2radec.json" -o "$current_dir/experiment_results/test_experiment/$result_dir/bin_schedule.gif" -b "$current_dir/experiment_results/test_experiment/$result_dir/bin_schedule.csv" -n $nside
+# python "$current_dir/survey_ops/plotting_alt.py" -f "$current_dir/data/nside${nside}_bin2radec.json" -o "$current_dir/experiment_results/test_experiment/$result_dir/bin_schedule.gif" -b "$current_dir/experiment_results/test_experiment/$result_dir/bin_schedule.csv" -n $nside
+python "$current_dir/survey_ops/plotting_alt.py" -f "$current_dir/data/nside${nside}_bin2radec.json" -o "$result_dir/bin_schedule.gif" -b "$result_dir/bin_schedule.csv" -n $nside
