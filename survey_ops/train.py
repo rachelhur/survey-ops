@@ -132,7 +132,8 @@ def main():
         'include_bin_features': args.include_bin_features,
         'do_cyclical_norm': args.do_cyclical_norm,
         'do_max_norm': args.do_max_norm,
-        'do_inverse_airmass': args.do_inverse_airmass
+        'do_inverse_airmass': args.do_inverse_airmass,
+        'calculate_action_mask': 'dqn' in args.algorithm_name
     }
     
     logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')

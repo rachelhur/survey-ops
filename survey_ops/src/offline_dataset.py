@@ -43,9 +43,11 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 do_cyclical_norm=True,
                 do_max_norm=True,
                 do_inverse_airmass=True,
+                calculate_action_mask=True,
                 ):
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
+        self.calculate_action_mask = calculate_action_mask
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
@@ -506,14 +508,17 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _construct_action_masks(self, timestamps=None):
         # given timestamp, determine bins which are outside of observable range
         els = np.empty((self.num_transitions, self.num_actions))
-        if not self.hpGrid.is_azel:
-            lon, lat = self.hpGrid.lon, self.hpGrid.lat
-            for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc="Calculating action mask"):
-                _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
-            self._els = els
-            action_mask = els > 0
+        if self.calculate_action_mask:
+            if not self.hpGrid.is_azel:
+                lon, lat = self.hpGrid.lon, self.hpGrid.lat
+                for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc="Calculating action mask"):
+                    _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
+                self._els = els
+                action_mask = els > 0
+            else:
+                action_mask = self.hpGrid.lat > 0
         else:
-            action_mask = self.hpGrid.lat > 0
+            action_mask = np.ones((self.num_transitions, self.num_actions))
         return action_mask
 
     def _get_zenith_states(self, original_df, timestamps, is_pointing=True):
