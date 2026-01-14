@@ -16,7 +16,7 @@ import torch.nn as nn
 def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, lr_scheduler_kwargs=None, gamma=None, tau=None):
     model_hyperparams = {
         'obs_dim': obs_dim,
-        'num_actions': num_actions,
+        'num_actions': num_actions, 
         'hidden_dim': hidden_dim,
         'lr': lr,
         'lr_scheduler': lr_scheduler,
@@ -26,8 +26,8 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
     if algorithm_name == 'ddqn' or algorithm_name == 'dqn':
         assert gamma is not None, "Gamma (discount factor) must be specified for DDQN."
         assert tau is not None, "Tau (target network update rate) must be specified for DDQN."
-        assert loss_fxn in ['mse', 'huber'], "DDQN only supports mse or huber loss functions."
-        
+        # assert loss_fxn in ['mse', 'huber'], "DDQN only supports mse or huber loss functions."
+
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
         elif loss_fxn == 'mse':

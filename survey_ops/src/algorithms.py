@@ -14,10 +14,10 @@ class AlgorithmBase:
     def __init__(self):
         super().__init__()
         
-    def train_step(self):
+    def train_step(self, batch):
         raise NotImplementedError
 
-    def select_action(self):
+    def select_action(self, state):
         raise NotImplementedError
 
     def save(self, filepath):
@@ -63,64 +63,59 @@ class DDQN(AlgorithmBase):
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
+        assert loss_fxn is not None
         self.loss_fxn = loss_fxn
 
     def train_step(self, batch):
-        obs, actions, rewards, next_obs, dones, action_masks = batch
-        if not torch.is_tensor(obs):
-            obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
-            actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
-            rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
-            next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
-            dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
-            action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
-            
-        # convert to tensors
-        else:
-            obs = obs.to(device=self.device, dtype=torch.float32)
-            actions = actions.to(device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
-            rewards = rewards.to(device=self.device, dtype=torch.float32)
-            next_obs = next_obs.to(device=self.device, dtype=torch.float32)
-            dones = dones.to(device=self.device, dtype=torch.float32)
-            action_masks = action_masks.to(device=self.device, dtype=torch.bool)
+        state, actions, rewards, next_state, dones, action_masks = batch
+
+        state = torch.as_tensor(state, device=self.device, dtype=torch.float32)
+        actions = torch.as_tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
+        rewards = torch.as_tensor(rewards, device=self.device, dtype=torch.float32)
+        next_state = torch.as_tensor(np.array(next_state), device=self.device, dtype=torch.float32)
+        dones = torch.as_tensor(dones, device=self.device, dtype=torch.float32)
+        action_masks = torch.as_tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
             
         # need to input (batch_size, obs_dim) into net - if obs_dim is 1, we get 1d tensor. Need to reshape
-        if obs.dim() == 1:
-            obs = obs.unsqueeze(1)
-            next_obs = next_obs.unsqueeze(1)
+        if state.dim() == 1:
+            state = state.unsqueeze(1)
+            next_state = next_state.unsqueeze(1)
         
         # get policy q vals for current state
-        all_q_vals = self.policy_net(obs)
-        current_q = all_q_vals.gather(1, actions).squeeze()
+        q_vals = self.policy_net(state)
+        q_vals = q_vals.gather(1, actions).squeeze(1)
 
         with torch.no_grad():
             if self.use_double:
                 # get policy best actions (need to mask invalid actions)
-                next_q_pol = self.policy_net(next_obs)
-                next_q_pol[~action_masks] = float('-inf') #-1e9
-                next_actions_pol = next_q_pol.argmax(1).type(torch.long)
+                pol_next_q = self.policy_net(next_state)
+                pol_next_q[~action_masks] = float('-inf') #-1e9
+                pol_next_actions = pol_next_q.argmax(1).type(torch.long)
 
                 # evaluate policy's next actions using target net
-                next_q_targ = self.target_net(next_obs).gather(1, next_actions_pol.unsqueeze(1)).squeeze(1)
+                target_next_q = self.target_net(next_state)
+                next_q_targ = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze(1)
 
                 td_target = rewards + self.gamma * (1 - dones) * next_q_targ
             else:
-                next_q = self.target_net(next_obs)
+                next_q = self.target_net(next_state)
                 # mask invalid actions
                 next_q[~action_masks] = -1e9 # float('-inf')
                 max_next_q = next_q.max(dim=1)[0]
                 td_target = rewards + self.gamma * max_next_q * (1 - dones) # , dtype=torch.float32, device=device
 
-        loss = self.loss_fxn(current_q, td_target)
+        loss = self.loss_fxn(q_vals, td_target)
         
         # optimize w/ backprop
         self.optimizer.zero_grad()
         loss.backward()
-        for name, param in self.policy_net.named_parameters():
-            if param.grad is not None:
-                if torch.isnan(param.grad).any():
-                    logger.debug(f"NaN gradient in {name}")
+        # Debugging nans in gradient
+        # for name, param in self.policy_net.named_parameters():
+        #     if param.grad is not None:
+        #         if torch.isnan(param.grad).any():
+        #             logger.debug(f"NaN gradient in {name}")
         # print(f"Max Gradient Norm: {prev_grad_norm.item()}")
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         self.optimizer.step()
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
@@ -128,7 +123,7 @@ class DDQN(AlgorithmBase):
         self._soft_update()
 
         # soft update done in agent
-        return loss.item(), current_q.mean().item()
+        return loss.item(), q_vals.mean().item()
 
     def _soft_update(self):
         # update target network
@@ -148,26 +143,38 @@ class DDQN(AlgorithmBase):
             obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             q_values = self.policy_net(obs).squeeze(0)
             # mask invalid actions
-            mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool)
-            q_values[~mask] = float('-inf')
+            action_mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool)
+            q_values[~action_mask] = float('-inf')
             action = torch.argmax(q_values).item()
         return int(action)
     
     def test_step(self, eval_batch):
-        obs, actions, rewards, next_obs, dones, action_masks = eval_batch
+        state, actions, rewards, next_state, dones, action_masks = eval_batch
 
         with torch.no_grad():      
             # convert to tensors
-            obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+            state = torch.as_tensor(state, device=self.device, dtype=torch.float32)
             actions = torch.tensor(actions, device=self.device, dtype=torch.long).unsqueeze(1) # needs to be long for .gather()
             rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
-            next_obs = torch.tensor(np.array(next_obs), device=self.device, dtype=torch.float32)
+            next_state = torch.tensor(np.array(next_state), device=self.device, dtype=torch.float32)
             dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
             action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
 
+            if self.use_double:
+                q_vals = self.policy_net(state)
+                q_vals[~action_masks] = -1e9
+                predicted_actions = q_vals.argmax(1).squeeze()
+
+                # q_max = q_vals.max(dim=1)
+                # q_dataset = q_vals.gather(1, actions).squeeze(1)
+                accuracy = (predicted_actions == actions).float()
+
+                print(q_vals.shape)                
+                loss = self.loss_fxn(q_vals, actions)
+            else:
+                raise NotImplementedError
+            return loss, q_vals[action_masks].mean(), accuracy.mean()#, q_max, q_dataset)
             
-        return
-                    # # # Test on a batch
                     # eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
                     # expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
                     

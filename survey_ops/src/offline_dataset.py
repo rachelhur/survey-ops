@@ -152,10 +152,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         self.num_transitions = states.shape[0]
         dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
-        self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
-        dones[self._done_indices] = True
+        # self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
+        # dones[self._done_indices] = True
         dones[-1] = True
-        action_masks = self._construct_action_masks(timestamps=df['timestamp'].values)
+        action_masks = self._construct_action_masks(timestamps=df.groupby('night').tail(-1)['timestamp'])
 
         # # Save Transitions as tensors
         self.states = torch.tensor(states, dtype=torch.float32)
@@ -170,7 +170,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         # Normalize states and next_states
         self._do_noncyclic_normalizations()
-
+    
     def __len__(self):
         return self.states.shape[0]
 
@@ -403,6 +403,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 xs[i], ys[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
             else:
                 xs[i], ys[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
+
         stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys], axis=2)
         bin_states = stacked.reshape(len(hour_angles), -1)
 
@@ -504,7 +505,16 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
     def _construct_action_masks(self, timestamps=None):
         # given timestamp, determine bins which are outside of observable range
-        return np.ones((self.num_transitions, self.num_actions), dtype=bool)
+        els = np.empty((self.num_transitions, self.num_actions))
+        if not self.hpGrid.is_azel:
+            lon, lat = self.hpGrid.lon, self.hpGrid.lat
+            for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc="Calculating action mask"):
+                _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
+            self._els = els
+            action_mask = els > 0
+        else:
+            action_mask = self.hpGrid.lat > 0
+        return action_mask
 
     def _get_zenith_states(self, original_df, timestamps, is_pointing=True):
         LSTs = get_lst(timestamps)
