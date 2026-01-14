@@ -1,0 +1,13 @@
+2026-01-14 08:43:34 - INFO - Saving results in ../experiment_results/test_experiment/evaluation_1/
+2026-01-14 08:43:34 - DEBUG - Experiment parameters:
+2026-01-14 08:43:34 - INFO - seed: 10
+2026-01-14 08:43:34 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-01-14 08:43:34 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-01-14 08:43:34 - INFO - trained_model_dir: ../experiment_results/test_experiment/
+2026-01-14 08:43:34 - INFO - evaluation_name: evaluation_1
+2026-01-14 08:43:34 - INFO - specific_years: None
+2026-01-14 08:43:34 - INFO - specific_months: None
+2026-01-14 08:43:34 - INFO - specific_days: None
+2026-01-14 08:43:34 - INFO - num_episodes: 1
+2026-01-14 08:43:34 - INFO - Loading raw data...
+2026-01-14 08:43:34 - INFO - Processing raw data into OfflineDataset()...
