@@ -18,15 +18,18 @@ import argparse
 def plot_loss_curve(results_outdir):
     with open(results_outdir + 'train_metrics.pkl', 'rb') as f:
         train_metrics = pickle.load(f)
+    with open(results_outdir + 'val_metrics.pkl', 'rb') as f:
+        val_metrics = pickle.load(f)
     fig, axs = plt.subplots(2, sharex=True, figsize=(5, 5))
-    axs[0].plot(train_metrics['loss_history'])
-    axs[0].hlines(y=0, xmin=0, xmax=len(train_metrics['loss_history']), color='red', linestyle='--')
+    axs[0].plot(train_metrics['train_loss'])
+    axs[0].hlines(y=0, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[0].set_ylabel('Loss', fontsize=14)
-    axs[1].plot(np.linspace(0, len(train_metrics['loss_history']), len(train_metrics['test_acc_history'])), train_metrics['test_acc_history'])
-    axs[1].hlines(y=1, xmin=0, xmax=len(train_metrics['loss_history']), color='red', linestyle='--')
+    axs[1].plot(np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['val_mean_accuracy'])), val_metrics['val_mean_accuracy'])
+    axs[1].hlines(y=1, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[1].set_xlabel('Train step', fontsize=14)
     axs[1].set_ylabel('Accuracy', fontsize=14)
     axs[1].set_xlabel('Train step', fontsize=14)
+    
     fig.tight_layout()
     fig.savefig(results_outdir + 'figures/' + 'train_history.png')
     plt.show()
@@ -61,7 +64,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=1024, help='Training batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default='cosine_annealing', help='cosine_annealing or None')
+    parser.add_argument('--lr_scheduler', type=str, default=None, help='cosine_annealing or None')
     parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
     parser.add_argument('--eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
     parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (in epochs)')
