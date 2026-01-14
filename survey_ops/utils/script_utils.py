@@ -122,22 +122,7 @@ def load_raw_data_to_dataframe(fits_path, json_path):
         df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
     return df
 
-def get_offline_dataset(df, binning_method, nside, bin_space, specific_years, specific_months, specific_days, include_bin_features, do_cyclical_norm, do_max_norm, do_inverse_airmass, include_default_features=True):
-    dataset =  OfflineDECamDataset(
-        df, 
-        binning_method=binning_method,
-        nside=nside,
-        bin_space=bin_space,
-        specific_years=specific_years,
-        specific_months=specific_months,
-        specific_days=specific_days,
-        include_default_features=include_default_features,
-        include_bin_features=include_bin_features,
-        do_cyclical_norm=do_cyclical_norm,
-        do_max_norm=do_max_norm,
-        do_inverse_airmass=do_inverse_airmass
-    )
-    return dataset
+
 
 def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
     # Save timestamps, field_ids, and bin numbers

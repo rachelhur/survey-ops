@@ -31,9 +31,15 @@ def blanco_observer(time=None):
 
     # initialize time
     if time is None:
-        observer.date = datetime.utcnow().strftime("%Y/%m/%d %H:%M:%S")
+        observer.date = datetime.now(tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
     else:
+<<<<<<< HEAD
         observer.date = datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
+=======
+        observer.date = datetime.fromtimestamp(time, tz=timezone.utc).strftime(
+            "%Y/%m/%d %H:%M:%S"
+        )
+>>>>>>> f1a31e42cfd35d45b6313beccbafc80d71173a65
 
     return observer
 
@@ -72,8 +78,8 @@ def equatorial_to_topographic(ra, dec, time=None, observer=None):
 
         # compute topographic position for the observer
         source.compute(observer)
-        az.append(source.az)
-        el.append(source.alt)
+        az.append(float(source.az))
+        el.append(float(source.alt))
 
     # return outputs
     if len(az) == 1:
@@ -229,7 +235,7 @@ def get_source_ra_dec(source, time=None, observer=None):
     elif source == "sun":
         body = ephem.Sun()
     body.compute(observer)
-    return body.ra, body.dec
+    return float(body.ra), float(body.dec)
 
 
 class HealpixGrid:

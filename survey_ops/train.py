@@ -10,8 +10,8 @@ import pickle
 from survey_ops.utils import pytorch_utils
 from survey_ops.src.agents import Agent
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
-from survey_ops.utils.script_utils import setup_logger, get_device, load_raw_data_to_dataframe, get_offline_dataset, setup_algorithm
-
+from survey_ops.utils.script_utils import setup_logger, get_device, load_raw_data_to_dataframe, setup_algorithm
+from survey_ops.src.offline_dataset import OfflineDECamDataset
 import argparse
 
 
@@ -105,26 +105,6 @@ def main():
 
     logger.info("Loading raw data...")
     raw_data_df = load_raw_data_to_dataframe(args.fits_path, args.json_path)
-    
-    logger.info("Processing raw data into OfflineDataset()...")
-    train_dataset = get_offline_dataset(
-        df=raw_data_df,
-        binning_method=args.binning_method, 
-        nside=args.nside, 
-        bin_space=args.bin_space, 
-        specific_years=args.specific_years, 
-        specific_months=args.specific_months, 
-        specific_days=args.specific_days, 
-        include_bin_features=args.include_bin_features, 
-        do_cyclical_norm=args.do_cyclical_norm, 
-        do_max_norm=args.do_max_norm, 
-        do_inverse_airmass=args.do_inverse_airmass
-        )
-    
-    colors = [f'C{i}' for i in range(7)]
-    for i, (bin_id, g) in enumerate(train_dataset._df.groupby('bin')):
-        plt.scatter(g.ra, g.dec, label=bin_id, color=colors[i%len(colors)], s=1)
-    plt.savefig(fig_outdir + 'train_data_dec_vs_ra.png')
 
     # Save these args for test data arguments in eval.py
     OFFLINE_DATASET_CONFIG = {
@@ -140,6 +120,21 @@ def main():
     }
     
     logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')
+
+    logger.info("Processing raw data into OfflineDataset()...")
+    train_dataset = OfflineDECamDataset(
+        df=raw_data_df,
+        specific_years=args.specific_years, 
+        specific_months=args.specific_months, 
+        specific_days=args.specific_days,
+        **OFFLINE_DATASET_CONFIG
+        )
+    
+    colors = [f'C{i}' for i in range(7)]
+    for i, (bin_id, g) in enumerate(train_dataset._df.groupby('bin')):
+        plt.scatter(g.ra, g.dec, label=bin_id, color=colors[i%len(colors)], s=1)
+    plt.savefig(fig_outdir + 'train_data_dec_vs_ra.png')
+
 
     with open(results_outdir + 'offline_dataset_config.pkl', 'wb') as f:
         pickle.dump(OFFLINE_DATASET_CONFIG, f)
