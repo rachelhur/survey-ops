@@ -87,13 +87,15 @@ class Agent:
             assert batch_size is not None
         
         train_metrics = {
-            'loss_history': [],
-            'q_history': [],
-            'test_acc_history': [] 
+            'train_loss': [],
+            'train_qvals': [],
         }
+
+        val_metrics = {'val_' + metric: [] for metric in self.algorithm.val_metrics}
 
         save_filepath = self.train_outdir + 'best_weights.pt'
         train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
+        val_metrics_filepath = self.train_outdir + 'val_metrics.pkl'
         self.algorithm.policy_net.train()
 
         if dataloader is not None:
@@ -117,9 +119,9 @@ class Agent:
             else:
                 batch = dataset.sample(batch_size)
 
-            loss, q_val = self.algorithm.train_step(batch)
-            train_metrics['loss_history'].append(loss)
-            train_metrics['q_history'].append(q_val)
+            loss, q_val = self.algorithm.train_step(batch, step_num=i_step)
+            train_metrics['train_loss'].append(loss)
+            train_metrics['train_qvals'].append(q_val)
 
             if i_step % eval_freq == 0:
                 with torch.no_grad():
@@ -130,20 +132,26 @@ class Agent:
                         except (NameError, StopIteration):
                             eval_iter = iter(dataloader)
                             eval_batch = next(eval_iter)
-                        eval_obs, expert_actions, _, _, _, action_masks = eval_batch
                     else:
                         # --- old method fallback ---
                         eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
-                    eval_loss, q_vals, accuracy = self.algorithm.test_step(eval_batch)
-                    train_metrics['test_acc_history'].append(accuracy.cpu().detach().numpy())
-                    print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
+                    val_metric_vals = self.algorithm.test_step(eval_batch)
+                    print(f"Validation check at train step {i_step}:")
+                    val_metrics_valdict = {}
+                    for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
+                        val_metrics_valdict.update({metric_name: metric_val})
+                        val_metrics[metric_name].append(metric_val)
+                        print(f'{metric_name} = {metric_val:.3f}')
+                    # print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
                     
-                    if eval_loss < best_val_loss:
-                        best_val_loss = eval_loss
-                        self.save(save_filepath)
-                        with open(train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(train_metrics, handle)
+                    # if eval_loss < best_val_loss:
+                    #     best_val_loss = eval_loss
+                    #     self.save(save_filepath)
+                with open(train_metrics_filepath, 'wb') as handle:
+                    pickle.dump(train_metrics, handle)
+                with open(val_metrics_filepath, 'wb') as handle:
+                    pickle.dump(val_metrics, handle)
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)

@@ -1,0 +1,34 @@
+2026-01-14 08:43:02 - INFO - Saving results in ../experiment_results/radec-with-bin-info/
+2026-01-14 08:43:02 - INFO - Experiment parameters:
+2026-01-14 08:43:02 - INFO - seed: 10
+2026-01-14 08:43:02 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-01-14 08:43:02 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-01-14 08:43:02 - INFO - parent_results_dir: ../experiment_results/
+2026-01-14 08:43:02 - INFO - exp_name: radec-with-bin-info
+2026-01-14 08:43:02 - INFO - binning_method: healpix
+2026-01-14 08:43:02 - INFO - nside: 16
+2026-01-14 08:43:02 - INFO - bin_space: radec
+2026-01-14 08:43:02 - INFO - specific_years: [2017, 2018]
+2026-01-14 08:43:02 - INFO - specific_months: None
+2026-01-14 08:43:02 - INFO - specific_days: None
+2026-01-14 08:43:02 - INFO - include_bin_features: False
+2026-01-14 08:43:02 - INFO - do_cyclical_norm: True
+2026-01-14 08:43:02 - INFO - do_max_norm: True
+2026-01-14 08:43:02 - INFO - do_inverse_airmass: True
+2026-01-14 08:43:02 - INFO - num_epochs: 5.0
+2026-01-14 08:43:02 - INFO - batch_size: 1024
+2026-01-14 08:43:02 - INFO - num_workers: 4
+2026-01-14 08:43:02 - INFO - lr: 0.001
+2026-01-14 08:43:02 - INFO - lr_scheduler: None
+2026-01-14 08:43:02 - INFO - hidden_dim: 4096
+2026-01-14 08:43:02 - INFO - eta_min: 1e-05
+2026-01-14 08:43:02 - INFO - patience: 10
+2026-01-14 08:43:02 - INFO - algorithm_name: behavior_cloning
+2026-01-14 08:43:02 - INFO - loss_function: cross_entropy
+2026-01-14 08:43:02 - INFO - tau: 0.005
+2026-01-14 08:43:02 - INFO - gamma: 0.99
+2026-01-14 08:43:02 - INFO - Loading raw data...
+2026-01-14 08:43:03 - INFO - Processing raw data into OfflineDataset()...
+2026-01-14 08:46:38 - DEBUG - Offline dataset config: {'binning_method': 'healpix', 'nside': 16, 'bin_space': 'radec', 'include_default_features': True, 'include_bin_features': False, 'do_cyclical_norm': True, 'do_max_norm': True, 'do_inverse_airmass': True}
+2026-01-14 08:46:38 - INFO - Initializing agent...
+2026-01-14 08:46:39 - INFO - Starting training...

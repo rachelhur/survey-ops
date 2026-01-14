@@ -45,7 +45,7 @@ class DDQN(AlgorithmBase):
     optimizer_kwargs (optional): 
     """
 
-    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, loss_fxn=None, use_double=True, \
+    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, target_update_freq=1000, loss_fxn=None, use_double=True, \
                  lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={}):
         super().__init__()
         self.name = 'DDQN'
@@ -57,6 +57,7 @@ class DDQN(AlgorithmBase):
         self.target_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.use_double = use_double
+        self.target_update_freq = target_update_freq
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=False, **optimizer_kwargs)
 
@@ -65,8 +66,9 @@ class DDQN(AlgorithmBase):
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
         assert loss_fxn is not None
         self.loss_fxn = loss_fxn
+        self.val_metrics = ['val_loss', 'mean_q_policy', 'mean_q_data', 'mean_accuracy']
 
-    def train_step(self, batch):
+    def train_step(self, batch, step_num):
         state, actions, rewards, next_state, dones, action_masks = batch
 
         state = torch.as_tensor(state, device=self.device, dtype=torch.float32)
@@ -81,20 +83,20 @@ class DDQN(AlgorithmBase):
             state = state.unsqueeze(1)
             next_state = next_state.unsqueeze(1)
         
-        # get policy q vals for current state
+        # Get policy's q vals for current state
         q_vals = self.policy_net(state)
-        q_vals = q_vals.gather(1, actions).squeeze(1)
+        q_current = q_vals.gather(1, actions).squeeze(1)
 
         with torch.no_grad():
             if self.use_double:
-                # get policy best actions (need to mask invalid actions)
+                # Select best action with policy net
                 pol_next_q = self.policy_net(next_state)
                 pol_next_q[~action_masks] = float('-inf') #-1e9
                 pol_next_actions = pol_next_q.argmax(1).type(torch.long)
 
-                # evaluate policy's next actions using target net
+                # Evaluate policy's next actions using target net
                 target_next_q = self.target_net(next_state)
-                next_q_targ = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze(1)
+                next_q_targ = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze()
 
                 td_target = rewards + self.gamma * (1 - dones) * next_q_targ
             else:
@@ -104,7 +106,7 @@ class DDQN(AlgorithmBase):
                 max_next_q = next_q.max(dim=1)[0]
                 td_target = rewards + self.gamma * max_next_q * (1 - dones) # , dtype=torch.float32, device=device
 
-        loss = self.loss_fxn(q_vals, td_target)
+        loss = self.loss_fxn(q_current, td_target)
         
         # optimize w/ backprop
         self.optimizer.zero_grad()
@@ -119,10 +121,10 @@ class DDQN(AlgorithmBase):
         self.optimizer.step()
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
-                    
-        self._soft_update()
+        
+        if step_num % self.target_update_freq == 0:
+            self._soft_update()
 
-        # soft update done in agent
         return loss.item(), q_vals.mean().item()
 
     def _soft_update(self):
@@ -160,36 +162,38 @@ class DDQN(AlgorithmBase):
             dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
             action_masks = torch.tensor(np.array(action_masks), device=self.device, dtype=torch.bool)
 
+            q_vals = self.policy_net(state)
+            q_current = q_vals.gather(1, actions.unsqueeze(1) if actions.dim() == 1 else actions).squeeze()
+            predicted_actions = q_vals.argmax(1)
+
+            # Compute TD targets for loss
             if self.use_double:
-                q_vals = self.policy_net(state)
-                q_vals[~action_masks] = -1e9
-                predicted_actions = q_vals.argmax(1).squeeze()
-
-                # q_max = q_vals.max(dim=1)
-                # q_dataset = q_vals.gather(1, actions).squeeze(1)
-                accuracy = (predicted_actions == actions).float()
-
-                print(q_vals.shape)                
-                loss = self.loss_fxn(q_vals, actions)
+                pol_next_q = self.policy_net(next_state)
+                pol_next_q[~action_masks] = -1e9
+                pol_next_actions = pol_next_q.argmax(1)
+                
+                target_next_q = self.target_net(next_state)
+                next_q_vals = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze()
             else:
-                raise NotImplementedError
-            return loss, q_vals[action_masks].mean(), accuracy.mean()#, q_max, q_dataset)
+                # DQN
+                target_next_q = self.target_net(next_state).clone()
+                target_next_q[~action_masks] = float('-inf')
+                next_q_vals = target_next_q.max(1)[0]
             
-                    # eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
-                    # expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
-                    
-                    # all_q_vals = self.algorithm.policy_net(eval_obs)
-                    # if self.algorithm.name != 'BehaviorCloning':
-                    #     all_q_vals[~action_masks] = float('-inf')
-                    # q_vals = all_q_vals.mean().item()
-                    
-                    # eval_loss = self.algorithm.loss_fxn(all_q_vals, expert_actions)
-                    # predicted_actions = all_q_vals.argmax(dim=1)
+            # Compute TD target: r + γ * Q(s', a') * (1 - done)
+            td_target = rewards + self.gamma * next_q_vals * (1 - dones)
+            
+            # Compute TD error/loss
+            loss = F.mse_loss(q_current, td_target)
 
-                    # if self.algorithm.name != 'BehaviorCloning':
-                    #     all_q_vals[~action_masks] = float('-inf')
-    
+            mean_accuracy = (predicted_actions == actions).float().mean()
 
+            q_dataset_mean = q_vals.gather(1, actions.unsqueeze(1) if actions.dim() == 1 else actions).squeeze().mean()
+            q_policy_mean = q_vals.max(dim=1)[0].mean()
+            
+
+            return loss, q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item()
+            
 class BehaviorCloning(AlgorithmBase):
     def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, device='cpu'):
         self.name = 'BehaviorCloning'
@@ -200,8 +204,9 @@ class BehaviorCloning(AlgorithmBase):
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
+        self.val_metrics = ['loss', 'logit_mean', 'accuracy']
         
-    def train_step(self, batch):
+    def train_step(self, batch, step_num):
         """
         Train the policy to mimic expert actions from offline data
         """
@@ -244,7 +249,7 @@ class BehaviorCloning(AlgorithmBase):
 
             accuracy = (predicted_actions == expert_actions).float().mean()
             
-        return loss, action_logits.mean(), accuracy
+        return loss.item(), action_logits.mean().item(), accuracy.item()
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():

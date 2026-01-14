@@ -1,0 +1,15 @@
+2026-01-14 08:44:46 - INFO - Saving results in ../experiment_results/ddqn-test/evaluation_1/
+2026-01-14 08:44:46 - DEBUG - Experiment parameters:
+2026-01-14 08:44:46 - INFO - seed: 10
+2026-01-14 08:44:46 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-01-14 08:44:46 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-01-14 08:44:46 - INFO - trained_model_dir: ../experiment_results/ddqn-test/
+2026-01-14 08:44:46 - INFO - evaluation_name: evaluation_1
+2026-01-14 08:44:46 - INFO - specific_years: [2018]
+2026-01-14 08:44:46 - INFO - specific_months: [12]
+2026-01-14 08:44:46 - INFO - specific_days: [1, 2, 3]
+2026-01-14 08:44:46 - INFO - num_episodes: 1
+2026-01-14 08:44:46 - INFO - Loading raw data...
+2026-01-14 08:44:47 - INFO - Processing raw data into OfflineDataset()...
+2026-01-14 08:44:47 - INFO - Loading test dataset with same config as training dataset...
+2026-01-14 08:44:49 - INFO - Setting up agent...
