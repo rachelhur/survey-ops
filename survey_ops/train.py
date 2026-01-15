@@ -24,7 +24,7 @@ def plot_loss_curve(results_outdir):
     axs[0].plot(train_metrics['train_loss'])
     axs[0].hlines(y=0, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[0].set_ylabel('Loss', fontsize=14)
-    axs[1].plot(np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['val_mean_accuracy'])), val_metrics['val_mean_accuracy'])
+    axs[1].plot(np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy'])), val_metrics['accuracy'])
     axs[1].hlines(y=1, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[1].set_xlabel('Train step', fontsize=14)
     axs[1].set_ylabel('Accuracy', fontsize=14)

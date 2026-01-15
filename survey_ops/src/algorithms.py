@@ -66,7 +66,7 @@ class DDQN(AlgorithmBase):
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
         assert loss_fxn is not None
         self.loss_fxn = loss_fxn
-        self.val_metrics = ['val_loss', 'mean_q_policy', 'mean_q_data', 'mean_accuracy']
+        self.val_metrics = ['val_loss', 'q_policy', 'q_data', 'val_accuracy']
 
     def train_step(self, batch, step_num):
         state, actions, rewards, next_state, dones, action_masks = batch
@@ -204,7 +204,7 @@ class BehaviorCloning(AlgorithmBase):
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
-        self.val_metrics = ['loss', 'logit_mean', 'accuracy']
+        self.val_metrics = ['val_loss', 'logit', 'accuracy']
         
     def train_step(self, batch, step_num):
         """

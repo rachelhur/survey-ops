@@ -91,7 +91,7 @@ class Agent:
             'train_qvals': [],
         }
 
-        val_metrics = {'val_' + metric: [] for metric in self.algorithm.val_metrics}
+        val_metrics = {metric: [] for metric in self.algorithm.val_metrics}
 
         save_filepath = self.train_outdir + 'best_weights.pt'
         train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
@@ -137,21 +137,21 @@ class Agent:
                         eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
                     val_metric_vals = self.algorithm.test_step(eval_batch)
-                    print(f"Validation check at train step {i_step}:")
-                    val_metrics_valdict = {}
+                    print(f"Validation check at train step {i_step}: " + " ".join(f"{k} = {v:.3f}" for k, v in zip(val_metrics.keys(), val_metric_vals)))
+
                     for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
-                        val_metrics_valdict.update({metric_name: metric_val})
                         val_metrics[metric_name].append(metric_val)
-                        print(f'{metric_name} = {metric_val:.3f}')
                     # print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
-                    
-                    # if eval_loss < best_val_loss:
-                    #     best_val_loss = eval_loss
-                    #     self.save(save_filepath)
-                with open(train_metrics_filepath, 'wb') as handle:
-                    pickle.dump(train_metrics, handle)
-                with open(val_metrics_filepath, 'wb') as handle:
-                    pickle.dump(val_metrics, handle)
+                    val_loss_cur = val_metrics['val_loss'][-1]
+                    logger.info(val_loss_cur, best_val_loss)
+                    if val_loss_cur < best_val_loss:
+                        logger.info(f'Improved model at step {i_step}. Saving weights.')
+                        best_val_loss = val_loss_cur
+                        self.save(save_filepath)
+                        with open(train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(train_metrics, handle)
+                        with open(val_metrics_filepath, 'wb') as handle:
+                            pickle.dump(val_metrics, handle)
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
