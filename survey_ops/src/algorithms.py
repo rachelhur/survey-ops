@@ -200,6 +200,7 @@ class BehaviorCloning(AlgorithmBase):
         self.device = device
         self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
+        assert loss_fxn is not None, "loss_fxn needs to be passed"
         self.loss_fxn = loss_fxn
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
