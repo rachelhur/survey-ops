@@ -33,14 +33,9 @@ def blanco_observer(time=None):
     if time is None:
         observer.date = datetime.now(tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
     else:
-<<<<<<< HEAD
-        observer.date = datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
-=======
         observer.date = datetime.fromtimestamp(time, tz=timezone.utc).strftime(
             "%Y/%m/%d %H:%M:%S"
         )
->>>>>>> f1a31e42cfd35d45b6313beccbafc80d71173a65
-
     return observer
 
 

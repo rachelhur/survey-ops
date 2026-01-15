@@ -47,50 +47,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 ):
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
-        self.calculate_action_mask = calculate_action_mask
 
-        # Initialize healpix grid if binning_method is healpix
-        self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
-        
-        bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
-        field2radec_filepath = f'../data/field2radec.json'
-        bin2radec_filepath = f'../data/nside{nside}_bin2radec.json'
-        field2name_filepath = f'../data/field2name.json'
-        field2nvisits_filepath = f'../data/field2nvisits.json'
-        
-        assert os.path.exists(bin2fields_in_bin_filepath) and os.path.exists(field2radec_filepath) and os.path.exists(bin2radec_filepath), f"bin and field mappings with nside {nside} do not exist in ../data. Check directory"
-        
-        with open(bin2fields_in_bin_filepath, 'r') as f:
-            self.bin2fields_in_bin = json.load(f)
-        with open(field2radec_filepath, 'r') as f:
-            self.field2radec = json.load(f)
-        with open(bin2radec_filepath, 'r') as f:
-            self.bin2radec = json.load(f)
-        with open(field2name_filepath, 'r') as f:
-            self.field2name = json.load(f)
-        with open(field2nvisits_filepath, 'r') as f:
-            self.field2nvisits = json.load(f)
-
-        self.bin2fields_in_bin = {int(k): v for k, v in self.bin2fields_in_bin.items()}
-        self.field2radec = {int(k): v for k, v in self.field2radec.items()}
-        self.bin2radec = {int(k): v for k, v in self.bin2radec.items()}
-
-        # Any experiment will likely have at least these state features
-        if include_default_features:
-            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start']
-            required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon']
-            if self.hpGrid:
-                if self.hpGrid.is_azel:
-                    required_bin_features += ['ra', 'dec'] #['delta_ra', 'delta_dec']
-                    # raise NotImplementedError
-                else:
-                    required_bin_features += ['az', 'el']
-                    
-        else:
-            required_point_features = []
-            required_bin_features = []
-
-        # Set up normalization decisions
+        # Set up static attributes
         self.do_z_score_norm = False #do_z_score_norm
         self.do_cyclical_norm = do_cyclical_norm
         self.do_max_norm = do_max_norm
@@ -99,32 +57,44 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.z_score_feature_names = []
         self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
         self.max_norm_feature_names = ['dec', 'el'] if self.do_max_norm else []
+        self.calculate_action_mask = calculate_action_mask # should be False if using bc (to minimize data processing time), otherwise True
 
-        # Include additional features not in default features above
-        pointing_feature_names = required_point_features + additional_pointing_features
-        if include_bin_features:
-            bin_feature_names = required_bin_features + additional_bin_features
-            bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(self.hpGrid.npix)])
-            bin_feature_names = bin_feature_names.flatten().tolist()
-        else:
-            bin_feature_names = []
-        self.base_pointing_feature_names = pointing_feature_names
-        self.base_bin_feature_names = bin_feature_names
-        self.base_feature_names = pointing_feature_names + bin_feature_names
-
-        # Replace cyclical features with their cyclical transforms/normalizations if on  
-        if self.do_cyclical_norm:
-            self.pointing_feature_names = self._expand_feature_names_for_cyclic_norm(pointing_feature_names)
-            self.bin_feature_names = self._expand_feature_names_for_cyclic_norm(bin_feature_names)
-        else:
-            self.pointing_feature_names = pointing_feature_names
-            self.bin_feature_names = bin_feature_names
+        # Initialize healpix grid if binning_method is healpix
+        self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
+        self.bin2coord = {int(i): (lon, lat) for i, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon, self.hpGrid.lat))}
         
         # Save list of all feature names
-        self.state_feature_names = self.pointing_feature_names + self.bin_feature_names
+        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names =\
+            self._setup_feature_names(include_default_features, include_bin_features, additional_pointing_features, additional_bin_features)
+        
+        # Load all fields and nvisits that exist in entire offline dataset (even if not specified in specific_years, specific_months, specific_days)
+        field2radec_filepath = f'../data/field2radec.json'
+        field2name_filepath = f'../data/field2name.json'
+        field2nvisits_filepath = f'../data/field2nvisits.json'
+        with open(field2radec_filepath, 'r') as f:
+            self.field2radec = json.load(f)
+        with open(field2name_filepath, 'r') as f:
+            self.field2name = json.load(f)
+        with open(field2nvisits_filepath, 'r') as f: # Not using nvisits right now
+            self.field2nvisits = json.load(f)
+
+        self.field2radec = {int(k): v for k, v in self.field2radec.items()}
+        self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
+        self.field_radecs = np.array(list(self.field2radec.values()))
+
+        # Dynamically assign self.get_fields_in_bin -- fields in azel depend on time, fields in radec are static
+        if self.hpGrid.is_azel:
+           # If bins in azel, fields in bin depend on timestamp      
+            self.get_fields_in_bin = self._get_fields_in_azel_bin
+        else:
+            # If bins in radec, exists a static file with fields in bin for all times
+            bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
+            with open(bin2fields_in_bin_filepath, 'r') as f:
+                self.bin2fields_in_bin = json.load(f)
+            self.get_fields_in_bin = self._get_fields_in_radec_bin
 
         # Process dataframe to add columns for pointing features
-        df = self._process_dataframe(df, pointing_feature_names, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
+        df = self._process_dataframe(df, self.pointing_feature_names, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
         self._df = df # Save for diagnostics
 
         # Set dataset-wide (across observation nights) attributes
@@ -133,13 +103,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         elif binning_method == 'healpix':
             self.num_actions = self.hpGrid.npix
             
-        # # Save mappings
-        # self.fieldname2idx = {field_name: i for i, field_name in enumerate(set(df.object))}
-        if not self.hpGrid.is_azel:
-            self.bin2fieldradecs = {bin_id: g.loc[:, ['ra', 'dec']].values for bin_id, g in df.groupby('bin')}
-            self.bin2fieldname = {bin_id: g.loc[:, ['object']].values for bin_id, g in df.groupby('bin')}
-            self.fieldname2bin = {name: bin for name, bin in zip(df['object'], df['bin'])}
-
         # Save night dates, total number of nights in dataset, and number of obs per night
         groups_by_night = df.groupby('night')
         self.unique_nights = groups_by_night.groups.keys()
@@ -147,17 +110,17 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.n_obs_per_night = groups_by_night.size() # nights have different numbers of observations
 
         # Construct Transitions
-        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features, bin_feature_names=bin_feature_names)
+        states, next_states, actions, rewards, dones, action_masks, num_transitions = self._construct_transitions(
+            df=df, 
+            include_bin_features=include_bin_features, 
+            bin_feature_names=self.bin_feature_names, 
+            num_bins_1d=num_bins_1d, 
+            binning_method=binning_method, 
+            bin_space=bin_space,
+            timestamps=df.groupby('night').tail(-1)['timestamp'] # all but zenith timestamps
+            )
+        self.num_transitions = num_transitions
         self.np_states, self.np_next_states = states, next_states
-        actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
-        rewards = self._construct_rewards(df)
-
-        self.num_transitions = states.shape[0]
-        dones = np.zeros(self.num_transitions, dtype=bool) # False unless last observation of the night
-        # self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
-        # dones[self._done_indices] = True
-        dones[-1] = True
-        action_masks = self._construct_action_masks(timestamps=df.groupby('night').tail(-1)['timestamp'])
 
         # # Save Transitions as tensors
         self.states = torch.tensor(states, dtype=torch.float32)
@@ -170,9 +133,60 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Set dimension of observation
         self.obs_dim = self.states.shape[-1]
 
-        # Normalize states and next_states
+        # Normalize states and next_states in place
         self._do_noncyclic_normalizations()
-    
+
+    def _setup_feature_names(self, include_default_features, include_bin_features, additional_pointing_features, additional_bin_features):
+        # Any experiment will likely have at least these state features
+        if not include_default_features:
+            required_point_features = []
+            required_bin_features = []
+        else:
+            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start'] \
+                                        if include_default_features else []
+            required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon'] \
+                                        if (include_default_features and include_bin_features) else []
+            if include_bin_features and self.hpGrid is not None:
+                required_bin_features += ['ra', 'dec'] if self.hpGrid.is_azel else ['az', 'el']
+
+        # Include additional features not in default features above
+        pointing_feature_names = required_point_features + additional_pointing_features
+        if include_bin_features:
+            bin_feature_names = required_bin_features + additional_bin_features
+            bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(self.hpGrid.npix)])
+            bin_feature_names = bin_feature_names.flatten().tolist()
+        else:
+            bin_feature_names = []
+
+        base_pointing_feature_names = pointing_feature_names.copy()
+        base_bin_feature_names = bin_feature_names.copy()
+        base_feature_names = base_pointing_feature_names + base_bin_feature_names
+
+        # Replace cyclical features with their cyclical transforms/normalizations if on  
+        if self.do_cyclical_norm:
+            pointing_feature_names = self._expand_feature_names_for_cyclic_norm(pointing_feature_names)
+            bin_feature_names = self._expand_feature_names_for_cyclic_norm(bin_feature_names)
+        else:
+            pointing_feature_names = pointing_feature_names
+            bin_feature_names = bin_feature_names
+        
+        state_feature_names = pointing_feature_names + bin_feature_names
+        
+        return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
+        
+    def _construct_transitions(self, df, include_bin_features, bin_feature_names, num_bins_1d, binning_method, bin_space, timestamps):
+        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features, bin_feature_names=bin_feature_names)
+        actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
+        rewards = self._construct_rewards(df)
+        num_transitions = states.shape[0]
+        dones = np.zeros(num_transitions, dtype=bool) # False unless last observation of the night
+        dones[-1] = True
+
+        # self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
+        # dones[self._done_indices] = True
+        action_masks = self._construct_action_masks(timestamps=timestamps, num_transitions=num_transitions)
+        return states, next_states, actions, rewards, dones, action_masks, num_transitions
+        
     def __len__(self):
         return self.states.shape[0]
 
@@ -279,7 +293,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return df_relabelled
 
     def _process_dataframe(self, df, pointing_feature_names, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
-        """Processes and filters the dataframe. Adds columns that we want to include in current pointing state features"""
+        """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
         df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
@@ -308,7 +322,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Sort df by timestamp
         df = df.sort_values(by='timestamp')
 
-        # Get time dependent features
+        # Get time dependent features (sun and moon pos)
         for idx, time in tqdm(zip(df.index, timestamps), total=len(timestamps), desc='Calculating sun and moon ra/dec and az/el'):
             sun_ra, sun_dec = ephemerides.get_source_ra_dec('sun', time=time)
             df.loc[idx, ['sun_ra', 'sun_dec']] = sun_ra, sun_dec
@@ -318,21 +332,18 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df.loc[idx, ['moon_ra', 'moon_dec']] = moon_ra, moon_dec
             df.loc[idx, ['moon_az', 'moon_el']] = ephemerides.equatorial_to_topographic(ra=moon_ra, dec=moon_dec, time=time)
 
-        # These features should probably always be normalized
         df['time_fraction_since_start'] = df.groupby('night')['timestamp'].transform(lambda x: (x - x.values[0]) / (x.values[-1] - x.values[0]) if len(x) > 1 else 0)
-        # df['time_seconds_since_start'] = df.groupby('night')['timestamp'].transform(lambda x: (x - x.min()) / x.max())
-        # convert degrees to radians
         df.loc[:, ['ra', 'dec', 'az', 'zd', 'ha']] *= units.deg
 
         # Normalize periodic features here and add as df cols
         if self.do_cyclical_norm:
-            for feat_name in pointing_feature_names:
+            for feat_name in self.base_pointing_feature_names:
                 if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
                     df[f'{feat_name}_cos'] = np.cos(df[feat_name].values)
                     df[f'{feat_name}_sin'] = np.sin(df[feat_name].values)
 
         # Add other feature columns for those not present in dataframe
-        for feat_name in self.pointing_feature_names:
+        for feat_name in self.base_pointing_feature_names:
             if feat_name in df.columns:
                 continue
             else:
@@ -346,21 +357,16 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             if self.hpGrid.is_azel:
                 lon = df['az']
                 lat = df['el']
-                df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
-                # time x ra, dec --> bin: (az, el)
-                # self.bin2fields = lambda time: ephemerides.equatorial_to_topographic(ra=df['az'], dec=df['el'], time=time)
-                # raise NotImplementedError
             else:
                 lon = df['ra']
                 lat = df['dec']
-                df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
+            df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
 
         df['field_id'] = df['object'].map({v: k for k, v in self.field2name.items()})
 
         # Insert zenith states in dataframe (needed for gym.environment to use zenith state as first state)
-        _df = df.reset_index(drop=True, inplace=False)
-        zenith_timestamps = _df.groupby('night').head(1).timestamp - 10
-        zenith_df = self._get_zenith_states(original_df=df, timestamps=zenith_timestamps)
+
+        zenith_df = self._get_zenith_states(original_df=df, is_pointing=True)
         df = pd.concat([df, zenith_df], ignore_index=True)
         df = df.sort_values(by='timestamp')
 
@@ -379,7 +385,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         """
         # Pointing features already in DECam data
         missing_cols = set(self.pointing_feature_names) - set(df.columns) == 0
-        assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be added in method self._process_dataframe()'
+        assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be implemented in method self._process_dataframe()'
         pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
         next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
 
@@ -425,8 +431,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         bin_df = pd.concat([bin_df, new_cols_df], axis=1)
 
         bin_df = bin_df.reset_index(drop=True, inplace=False)
-        zenith_timestamps = bin_df.groupby('night').head(1).timestamp - 10
-        zenith_df = self._get_zenith_states(original_df=bin_df, timestamps=zenith_timestamps, is_pointing=False)
+        zenith_df = self._get_zenith_states(original_df=bin_df, is_pointing=False)
         bin_df = pd.concat([bin_df, zenith_df], ignore_index=True)
         bin_df = bin_df.sort_values(by='timestamp')
         
@@ -505,9 +510,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         rewards = (teff_no_zen - min_teff)/max_teff
         return rewards
 
-    def _construct_action_masks(self, timestamps=None):
+    def _construct_action_masks(self, timestamps, num_transitions):
         # given timestamp, determine bins which are outside of observable range
-        els = np.empty((self.num_transitions, self.num_actions))
+        els = np.empty((num_transitions, self.num_actions))
         if self.calculate_action_mask:
             if not self.hpGrid.is_azel:
                 lon, lat = self.hpGrid.lon, self.hpGrid.lat
@@ -518,17 +523,19 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             else:
                 action_mask = self.hpGrid.lat > 0
         else:
-            action_mask = np.ones((self.num_transitions, self.num_actions))
+            action_mask = np.ones((num_transitions, self.num_actions))
         return action_mask
 
-    def _get_zenith_states(self, original_df, timestamps, is_pointing=True):
-        LSTs = get_lst(timestamps)
+    def _get_zenith_states(self, original_df, is_pointing=True):
+        _df = original_df.reset_index(drop=True, inplace=False)
+        zenith_timestamps = _df.groupby('night').head(1).timestamp - 10
+        LSTs = get_lst(zenith_timestamps)
         blanco_lat = -0.5265599205997796 # rad
 
         zenith_rows = []
         nights = original_df.night.unique()
         if is_pointing:
-            for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating zenith states'):
+            for i_row, time in tqdm(enumerate(zenith_timestamps), total=len(zenith_timestamps), desc='Calculating zenith states'):
                 row_dict = {}
                 row_dict['timestamp'] = time
                 row_dict['night'] = nights[i_row]
@@ -557,7 +564,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
         else: # ['ha', 'airmass', 'ang_dist_to_moon']
-            for i_row, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating grid-wide zenith states'):
+            for i_row, time in tqdm(enumerate(zenith_timestamps), total=len(zenith_timestamps), desc='Calculating grid-wide zenith states'):
                 row_dict = {}
                 row_dict['time'] = time
                 row_dict['night'] = nights[i_row]
@@ -578,7 +585,16 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
         return zenith_df
+
+    def _get_fields_in_azel_bin(self, bin_num, timestamp):
+        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
+        field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
+        fields_in_bin = self.field_ids[field_bins == bin_num]
+        return fields_in_bin
     
+    def _get_fields_in_radec_bin(self, bin_num, timestamp=None):
+        return self.bin2fields_in_bin.get(bin_num)
+
     def get_dataloader(self, batch_size, num_workers, pin_memory):
         loader = DataLoader(
             self,
@@ -593,6 +609,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             pin_memory=pin_memory,
         )
         return loader
+
 
 class ToyDatasetv0:
     """
