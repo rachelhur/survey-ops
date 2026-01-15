@@ -15,6 +15,10 @@ import os
 import time
 
 import astropy
+import logging
+
+# Get the logger associated with this module's name (e.g., 'my_module')
+logger = logging.getLogger(__name__)
 
 def get_lst(timestamp):
     t = astropy.time.Time(timestamp, format='unix', scale='utc')
@@ -101,7 +105,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         if binning_method == 'uniform_grid':
             self.num_actions = int(num_bins_1d**2)
         elif binning_method == 'healpix':
-            self.num_actions = self.hpGrid.npix
+            self.num_actions = len(self.hpGrid.lon)
             
         # Save night dates, total number of nights in dataset, and number of obs per night
         groups_by_night = df.groupby('night')
@@ -153,7 +157,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         pointing_feature_names = required_point_features + additional_pointing_features
         if include_bin_features:
             bin_feature_names = required_bin_features + additional_bin_features
-            bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(self.hpGrid.npix)])
+            bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(self.hpGrid.idx_lookup))])
             bin_feature_names = bin_feature_names.flatten().tolist()
         else:
             bin_feature_names = []
@@ -175,7 +179,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
         
     def _construct_transitions(self, df, include_bin_features, bin_feature_names, num_bins_1d, binning_method, bin_space, timestamps):
-        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features, bin_feature_names=bin_feature_names)
+        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features)
         actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
         rewards = self._construct_rewards(df)
         num_transitions = states.shape[0]
@@ -213,6 +217,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return feature_names
 
     def _do_noncyclic_normalizations(self):
+        logger.info("Performing normalizations")
         """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
         if self.do_inverse_airmass:
             
@@ -391,12 +396,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         return pointing_features, next_pointing_features
         
-    def _construct_bin_features(self, bin_feature_names, timestamps, datetimes):
+    def _construct_bin_features(self, timestamps, datetimes):
         # Get values from timestamp pandas.Series
         timestamps = timestamps.values
 
         # Create empty arrays 
-        hour_angles = np.empty(shape=(len(timestamps), self.hpGrid.npix))
+        hour_angles = np.empty(shape=(len(timestamps), len(self.hpGrid.idx_lookup)))
         airmasses = np.empty_like(hour_angles)
         moon_dists = np.empty_like(hour_angles)
         xs = np.empty_like(hour_angles) # xs = az if actions are in ra, dec
@@ -414,15 +419,14 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys], axis=2)
         bin_states = stacked.reshape(len(hour_angles), -1)
-
-        bin_df = pd.DataFrame(data=bin_states, columns=bin_feature_names)
+        bin_df = pd.DataFrame(data=bin_states, columns=self.base_bin_feature_names)
         bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
         bin_df['timestamp'] = timestamps
 
         # Normalize periodic features here and add as df cols
         new_cols = {}
         if self.do_cyclical_norm:
-            for feat_name in bin_feature_names:
+            for feat_name in tqdm(self.base_bin_feature_names, total=len(self.base_bin_feature_names), desc='Normalizing bin features'):
                 if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
                     new_cols[f'{feat_name}_cos'] = np.cos(bin_df[feat_name].values)
                     new_cols[f'{feat_name}_sin'] = np.sin(bin_df[feat_name].values)
@@ -451,10 +455,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self._bin_df = bin_df
         return bin_features, next_bin_features
     
-    def _construct_states(self, df, include_bin_features, bin_feature_names):
+    def _construct_states(self, df, include_bin_features):
         pointing_features, next_pointing_features = self._construct_pointing_features(df=df)
         if include_bin_features:
-            bin_features, next_bin_features = self._construct_bin_features(bin_feature_names=bin_feature_names, timestamps=df['timestamp'], datetimes=df['datetime'])
+            bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'], datetimes=df['datetime'])
             self.bin_features = bin_features
             self.next_bin_features = next_bin_features
             states = np.concatenate((pointing_features, bin_features), axis=1)
