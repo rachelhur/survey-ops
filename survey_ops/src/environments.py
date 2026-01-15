@@ -265,10 +265,6 @@ class OfflineEnv(BaseTelescope):
         self.max_norm_feature_names = test_dataset.max_norm_feature_names
         self.do_inverse_airmass = test_dataset.do_inverse_airmass
 
-        # self.fieldname2idx = train_dataset.fieldname2idx
-        # self.fieldidx2name = {v: k for k, v in train_dataset.fieldname2idx.items()}
-        # self.fieldname2bin = train_dataset.fieldname2bin
-        # self.bin2fieldname = train_dataset.bin2fieldname
         self.bin2fieldradecs = test_dataset.bin2fieldradecs
         # The following is saved in ../data/*.json files
         self.bin2fields_in_bin = {int(k): v for k, v in test_dataset.bin2fields_in_bin.items()}
@@ -300,9 +296,6 @@ class OfflineEnv(BaseTelescope):
         else:
             self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
 
-        # self._visited = []
-        # self._night_idx = -1
-
         self.obs_dim = test_dataset.obs_dim
         self.observation_space = gym.spaces.Box(
             low=-100, #np.min(dataset.obs),
@@ -311,7 +304,6 @@ class OfflineEnv(BaseTelescope):
             dtype=np.float32,
         )
         # Define action space        
-        # self.action_space = gym.spaces.Discrete(n=self.hpGrid.npix)
         self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.hpGrid.npix, len(self.field2radec)]), dtype=np.int32)
 
         self._state = np.zeros(self.obs_dim, dtype=np.float32)
