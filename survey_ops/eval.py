@@ -19,8 +19,9 @@ from survey_ops.utils import pytorch_utils
 from survey_ops.src.agents import Agent
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
 from survey_ops.utils.pytorch_utils import seed_everything
-from survey_ops.utils.script_utils import setup_algorithm, setup_logger, get_device, load_raw_data_to_dataframe, get_offline_dataset
+from survey_ops.utils.script_utils import setup_algorithm, setup_logger, get_device, load_raw_data_to_dataframe
 from survey_ops.src.environments import OfflineEnv
+from survey_ops.src.offline_dataset import OfflineDECamDataset
 
 import argparse
 
@@ -144,7 +145,7 @@ def main():
 
 
     logger.info("Loading test dataset with same config as training dataset...")
-    test_dataset = get_offline_dataset(raw_data_df, specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days, **OFFLINE_DATASET_CONFIG) 
+    test_dataset = OfflineDECamDataset(raw_data_df, specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days, **OFFLINE_DATASET_CONFIG) 
                                     #    args.binning_method, args.nside, args.bin_space, args.test_specific_years, args.test_specific_months, args.test_specific_days, \
                                         # args.no_bin_features, args.no_cyclical_norm, args.no_max_norm, args.no_inverse_airmass)
     
