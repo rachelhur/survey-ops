@@ -236,14 +236,10 @@ def plot_fields(
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
     # set title to selected time
-<<<<<<< HEAD
-    plt.title(datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
-=======
     plt.title(
         datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
         + " UTC"
     )
->>>>>>> f1a31e42cfd35d45b6313beccbafc80d71173a65
 
     # plot current field
     skymap.scatter(
@@ -438,16 +434,11 @@ def plot_bins(
     zenith_ra, zenith_dec = ephemerides.get_source_ra_dec("zenith", observer=observer)
     skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
 
-<<<<<<< HEAD
-    # set title to selected time #TODO fix timezone issue
-    plt.title(datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S") + " UTC")
-=======
     # set title to selected time
     plt.title(
         datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
         + " UTC"
     )
->>>>>>> f1a31e42cfd35d45b6313beccbafc80d71173a65
 
     # re-create the healpix grid
     hpgrid = ephemerides.HealpixGrid(nside=nside, is_azel=is_azel)
@@ -618,13 +609,9 @@ def plot_bins_movie(
 
     # plot each observation successively, saving pngs
     plt.ioff()
-<<<<<<< HEAD
-    for i, (time, idx, alternate_idx) in tqdm(enumerate(zip(times, idxs, alternate_idxs)), total=len(times)):
-=======
     for i, (time, idx, alternate_idx) in enumerate(
         zip(tqdm(times), idxs, alternate_idxs)
     ):
->>>>>>> f1a31e42cfd35d45b6313beccbafc80d71173a65
         skymap = plot_bins(
             time,
             current_idx=idx,
