@@ -199,6 +199,11 @@ def plot_fields(
     plot_airmass=1.4,
     plot_galaxy=True,
     plot_moon=True,
+    observer=None,
+    skymap=None,
+    current_kwargs={},
+    completed_kwargs={},
+    future_kwargs={},
 ):
     """
     Initialize a sky view and plot of current and completed fields at a selected time.
@@ -221,6 +226,12 @@ def plot_fields(
         Whether to plot a line through the galactic plane +/-1deg
     plot_moon : bool [True]
         Whether to plot a circle at the moon's position
+    observer : ephem.Observer [None]
+        An observer instance. Defaults to blanco_observer at specified time.
+    skymap : SkyMap [None]
+        A SkyMap plot instance on which to plot. Defaults to creating a new instance.
+    current_kwargs, completed_kwargs, future_kwargs : dict [{}]
+        kwargs to pass to SkyMap.scatter while plotting fields, updating the defaults.
 
     Returns
     -------
@@ -229,9 +240,11 @@ def plot_fields(
     """
 
     # initialize figure at selected time
-    observer = ephemerides.blanco_observer(time=time)
+    observer = ephemerides.blanco_observer(time=time) if observer is None else observer
     zenith_ra, zenith_dec = ephemerides.get_source_ra_dec("zenith", observer=observer)
-    skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
+    skymap = (
+        SkyMap(center_ra=zenith_ra, center_dec=zenith_dec) if skymap is None else skymap
+    )
 
     # set title to selected time
     plt.title(
@@ -240,39 +253,46 @@ def plot_fields(
     )
 
     # plot current field
-    skymap.scatter(
-        ra=current_radec[0],
-        dec=current_radec[1],
-        c="0.6",
-        edgecolor="k",
-        zorder=10,
+    if not np.any(np.isnan(np.asarray(current_radec, dtype=float))):
+        kwargs = dict(
+            c="0.6",
+            edgecolor="k",
+            zorder=10,
+            marker="H",
+            s=80,
+        )
+        kwargs.update(current_kwargs)
+        skymap.scatter(ra=current_radec[0], dec=current_radec[1], **kwargs)
+
+    # plot completed fields
+    kwargs = dict(
+        c="0.8",
+        edgecolor=None,
+        zorder=9,
         marker="H",
         s=80,
     )
-
-    # plot completed fields
+    kwargs.update(completed_kwargs)
+    completed_radec = np.asarray(completed_radec, dtype=float)
+    keep = np.all(~np.isnan(completed_radec), axis=1)
     if len(completed_radec) > 0:
         skymap.scatter(
-            ra=np.asarray(completed_radec)[:, 0],
-            dec=np.asarray(completed_radec)[:, 1],
-            c="0.8",
-            edgecolor=None,
-            zorder=9,
-            marker="H",
-            s=80,
+            ra=completed_radec[keep, 0], dec=completed_radec[keep, 1], **kwargs
         )
 
     # plot future fields
+    kwargs = dict(
+        facecolor="none",
+        edgecolor="gainsboro",
+        zorder=8,
+        marker="H",
+        s=80,
+    )
+    kwargs.update(future_kwargs)
+    future_radec = np.asarray(future_radec, dtype=float)
+    keep = np.all(~np.isnan(future_radec), axis=1)
     if len(future_radec) > 1:
-        skymap.scatter(
-            ra=np.asarray(future_radec)[:, 0],
-            dec=np.asarray(future_radec)[:, 1],
-            facecolor="none",
-            edgecolor="gainsboro",
-            zorder=8,
-            marker="H",
-            s=80,
-        )
+        skymap.scatter(ra=future_radec[:, 0], dec=future_radec[:, 1], **kwargs)
 
     # plot zenith marking
     if plot_zenith:
@@ -326,7 +346,7 @@ def plot_fields(
     return skymap
 
 
-def plot_fields_movie(outfile, times, ras, decs):
+def plot_fields_movie(outfile, times, field_pos):
     """
     Creates a gif of fields observed over the course of a night.
 
@@ -349,14 +369,17 @@ def plot_fields_movie(outfile, times, ras, decs):
     # create temporary directory for temporary png files
     tmpdir = tempfile.mkdtemp()
 
+    # ensure positions are numpy array
+    field_pos = np.asarray(field_pos)
+
     # plot each observation successively, saving pngs
     plt.ioff()
-    for i, (time, ra, dec) in enumerate(zip(tqdm(times), ras, decs)):
+    for i, time in enumerate(tqdm(times)):
         skymap = plot_fields(
             time,
-            current_radec=(ra, dec),
-            completed_radec=list(zip(ras[:i], decs[:i])),
-            future_radec=list(zip(ras[i + 1 :], decs[i + 1 :])),
+            current_radec=field_pos[i, :],
+            completed_radec=field_pos[:i, :],
+            future_radec=field_pos[i + 1 :, :],
         )
         plt.savefig(os.path.join(tmpdir, "field_%08i.png" % i))
         plt.close(skymap.fig)
@@ -501,8 +524,6 @@ def plot_bins(
     cmap = truncate_colormap(cm.Greens, 0.3, 1.0)
     norm = colors.Normalize(vmin=1, vmax=max(total_counts.values()))
     for idx, count in completed_counts.items():
-        if alternate_idx != current_idx and idx == current_idx:
-            continue
         skymap.poly(
             ra=ra[idx],
             dec=dec[idx],
@@ -573,7 +594,13 @@ def plot_bins(
 
 
 def plot_bins_movie(
-    outfile, nside, times, idxs, alternate_idxs=None, sky_bin_mapping=None
+    outfile,
+    nside,
+    times,
+    idxs,
+    alternate_idxs=None,
+    sky_bin_mapping=None,
+    field_pos=None,
 ):
     """
     Creates a gif of fields observed over the course of a night.
@@ -593,6 +620,9 @@ def plot_bins_movie(
     sky_bin_mapping : dict [None]
         If provided, is used to validate that the recreated healpix grid matches the
         provided grid.
+    field_pos : list of float tuples [None]
+        List of field (ra, dec) for each observation. If provided, plots specific fields
+        overlaid on the bins
     """
 
     # ensure output file is gif
@@ -605,11 +635,15 @@ def plot_bins_movie(
     # duplicate bins if alternate bins is not given
     alternate_idxs = alternate_idxs if alternate_idxs is not None else idxs
 
+    # make sure field pos is numpy array
+    field_pos = None if field_pos is None else np.asarray(field_pos)
+
     # plot each observation successively, saving pngs
     plt.ioff()
     for i, (time, idx, alternate_idx) in enumerate(
         zip(tqdm(times), idxs, alternate_idxs)
     ):
+        # plot the sky bins
         skymap = plot_bins(
             time,
             current_idx=idx,
@@ -619,6 +653,26 @@ def plot_bins_movie(
             nside=nside,
             sky_bin_mapping=sky_bin_mapping,
         )
+
+        # plot the sky fields on the sky map
+        if field_pos is not None:
+            skymap = plot_fields(
+                time,
+                current_radec=field_pos[i, :],
+                completed_radec=field_pos[:i, :],
+                future_radec=field_pos[i + 1 :, :],
+                plot_zenith=False,
+                plot_airmass=0,
+                plot_galaxy=False,
+                plot_moon=False,
+                observer=None,
+                skymap=skymap,
+                current_kwargs={"edgecolor": "darkgreen", "c": "forestgreen", "s": 60},
+                completed_kwargs={"edgecolor": "seagreen", "c": "none", "s": 60},
+                future_kwargs={"edgecolor": "silver", "s": 60},
+            )
+
+        # save the figure
         plt.savefig(os.path.join(tmpdir, "field_%08i.png" % i))
         plt.close(skymap.fig)
     plt.ion()
@@ -648,25 +702,68 @@ if __name__ == "__main__":
         "-o",
         "--outfile",
         type=str,
+        required=True,
         help="Path to output gif file.",
     )
     parser.add_argument(
-        "-f",
-        "--field_file",
+        "-s",
+        "--schedule",
         type=str,
-        help="Path to the field file, a json file that maps field_id to (ra, dec).",
+        required=True,
+        help=(
+            'Path to the schedule file, a csv file with keys "time" and some '
+            'combination of "field_id", "policy_field_id", "bin_id", "policy_bin_id".'
+        ),
     )
     parser.add_argument(
-        "-s",
-        "--schedule_file",
+        "-t",
+        "--plot-type",
         type=str,
-        help='Path to the schedule file, a csv with keys "time" and "field_id".',
+        required=True,
+        choices=["field", "bin", "fieldbin"],
+        help=(
+            'Whether to plot schedule of "field", "bin", or combined "fieldbin". '
+            'Requires "(policy_)field_id" and/or "(policy_)bin_id" keys, respectively.'
+        ),
+    )
+    parser.add_argument(
+        "-c",
+        "--compare",
+        action="store_true",
+        help=(
+            "Switch to plot a comparison of two schedules, identified as with/without "
+            '"policy_" in the schedule file.'
+        ),
+    )
+    parser.add_argument(
+        "-p",
+        "--policy",
+        action="store_true",
+        help=(
+            'Switch to plot "policy_" schedule keys as the primary schedule. When '
+            'plotting fields, this selects "policy_field_id" instead of "field_id". '
+            'When plotting bins, this uses "policy_bin_id" as the primary schedule, and'
+            ' "bin_id" as the alternate schedule if using the compare option.'
+        ),
+    )
+    parser.add_argument(
+        "-f",
+        "--fields",
+        type=str,
+        help=(
+            "Path to field file, a json file that maps field_id to (ra, dec) in rad. "
+            "Used for making field plots."
+        ),
     )
     parser.add_argument(
         "-b",
-        "--bin_schedule_file",
+        "--bins",
         type=str,
-        help='Path to the sky bin index schedule file, a csv with keys "time", "policy_bin_id", and "bin_id".',
+        help=(
+            "Path to bin file, a json file that maps bin_id to (ra, dec) in rad. Not "
+            "needed if nside provided, in which case this is used to verify grid "
+            "reconstruction. Used for making bin plots."
+        ),
     )
     parser.add_argument(
         "-n",
@@ -676,30 +773,64 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # load field file
-    with open(args.field_file) as f:
-        id2pos = json.load(f)
+    # check argument compatibility
+    if args.plot_type in ["field", "fieldbin"] and len(args.fields) == 0:
+        raise ValueError("field file required to plot fields.")
+    if args.plot_type in ["bin", "fieldbin"] and args.nside is None:
+        raise ValueError("nside required to plot bins.")
+    if args.plot_type == "field" and args.compare:
+        raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
+
+    # load schedule file and check validity
+    schedule = pd.read_csv(args.schedule)
+    if "time" not in schedule.columns:
+        raise KeyError('Missing "time" required to make requested plot.')
+    if args.plot_type in ["field", "fieldbin"]:
+        if args.policy and "policy_field_id" not in schedule.columns:
+            raise KeyError('Missing "policy_field_id" required to make requested plot.')
+        if not args.policy and "field_id" not in schedule.columns:
+            raise KeyError('Missing "field_id" required to make requested plot.')
+    if args.plot_type in ["bin", "fieldbin"]:
+        if (args.compare or args.policy) and "policy_bin_id" not in schedule.columns:
+            raise KeyError('Missing "policy_bin_id" required to make requested plot.')
+        if (args.compare or not args.policy) and "bin_id" not in schedule.columns:
+            raise KeyError('Missing "bin_id" required to make requested plot.')
+
+    # load field and bin mappings
+    field_id2pos = None
+    if args.fields is not None:
+        with open(args.fields) as f:
+            field_id2pos = json.load(f)
+    bin_id2pos = None
+    if args.bins is not None:
+        with open(args.bins) as f:
+            bin_id2pos = json.load(f)
+
+    # parse field, bin positions
+    field_ids_1 = schedule.get("policy_field_id" if args.policy else "field_id", None)
+    if field_ids_1 is None or field_id2pos is None:
+        field_pos_1 = None
+    else:
+        field_pos_1 = np.asarray(
+            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
+        )
+    bin_ids_1 = schedule.get("policy_bin_id" if args.policy else "bin_id", None)
+    bin_ids_2 = schedule.get("bin_id" if args.policy else "policy_bin_id", None)
 
     # call plotting functions
-    if args.schedule_file:
-        schedule = pd.read_csv(args.schedule_file)
+    if args.plot_type == "field":
         plot_fields_movie(
             outfile=args.outfile,
             times=schedule["time"].values,
-            ras=[
-                id2pos[str(fid)][0] * units.deg for fid in schedule["field_id"].values
-            ],
-            decs=[
-                id2pos[str(fid)][1] * units.deg for fid in schedule["field_id"].values
-            ],
+            field_pos=field_pos_1,
         )
-    elif args.bin_schedule_file:
-        schedule = pd.read_csv(args.bin_schedule_file)
+    else:
         plot_bins_movie(
             outfile=args.outfile,
             nside=args.nside,
             times=schedule["time"].values,
-            idxs=schedule["bin_id"].values,
-            alternate_idxs=schedule["policy_bin_id"].values,
-            sky_bin_mapping=id2pos,
+            idxs=bin_ids_1.values,
+            alternate_idxs=bin_ids_2.values if args.compare else None,
+            sky_bin_mapping=bin_id2pos,
+            field_pos=field_pos_1 if args.plot_type == "fieldbin" else None,
         )
