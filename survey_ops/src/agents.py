@@ -188,8 +188,9 @@ class Agent:
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
-        field2nvisits, bin2fields_in_bin, field2radec = env.unwrapped.field2nvisits, env.unwrapped.bin2fields_in_bin, env.unwrapped.field2radec
+        field2nvisits, field2radec = env.unwrapped.field2nvisits, env.unwrapped.field2radec
         hpGrid = env.unwrapped.test_dataset.hpGrid
+        get_fields_in_bin = env.unwrapped.get_fields_in_bin
         
         for episode in tqdm(range(num_episodes)):
             obs, info = env.reset()
@@ -208,6 +209,7 @@ class Agent:
             night_idx = 0
             while not (terminated or truncated):
                 with torch.no_grad():
+                    timestamp = info.get('timestamp')
                     observations[f'night-{night_idx}'].append(obs)
                     rewards[f'night-{night_idx}'].append(reward)
                     timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
@@ -216,7 +218,8 @@ class Agent:
 
                     action_mask = info.get('action_mask', None)
                     action = self.act(obs, action_mask, epsilon=None)
-                    field_id = self.choose_field(obs, action, info, field2nvisits, field2radec, bin2fields_in_bin, hpGrid, field_choice_method)
+                    fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp)
+                    field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
 
                     actions = np.array([action, field_id], dtype=np.int32)
                     obs, reward, terminated, truncated, info = env.step(actions)
@@ -238,7 +241,7 @@ class Agent:
             }})
 
             episode_rewards.append(episode_reward)
-            print(f'terminated at {i}')
+            print(f'terminated at step {i}')
 
         eval_metrics.update({
             'mean_reward': np.mean(episode_rewards),
@@ -268,7 +271,6 @@ class Agent:
         """
         return self.algorithm.select_action(obs, action_mask, epsilon)
     
-    
     def save(self, filepath):
         """Saves algorithm parameters to a file.
 
@@ -285,24 +287,18 @@ class Agent:
         """
         self.algorithm.load(filepath)
 
-    def choose_field(self, obs, bin_num, info, field2nvisits, field2radec, bin2fields_in_bin, hpGrid, field_choice_method): # az, el, az_data, el_data, values, field_ids_in_bin, bin_num
+    def choose_field(self, obs, info, field2nvisits, field2radec, hpGrid, field_choice_method, fields_in_bin): 
         """
         Choose field in bin based on interpolated Q-values
         """
         visited = info.get('visited', None)
         action_mask = info.get('action_mask', None)
-        field_ids_in_bin = bin2fields_in_bin[bin_num]
-        field_ids_in_bin = [fid for fid in field_ids_in_bin if visited.count(fid) < field2nvisits[fid]]
+        field_ids_in_bin = [fid for fid in fields_in_bin if visited.count(fid) < field2nvisits[fid]]
 
-        if bin_num not in bin2fields_in_bin:
-            return None, None
-        
         if field_choice_method == 'interp':
             with torch.no_grad():
                 obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
                 mask = torch.as_tensor(action_mask, device=self.device, dtype=torch.bool)
-                # obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
-                # mask = action_mask.to(self.device, dtype=torch.bool).unsqueeze(0)
                 q_vals = self.algorithm.policy_net(obs).squeeze(0)
                 q_vals = q_vals.cpu().detach().numpy()
 

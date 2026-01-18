@@ -250,7 +250,7 @@ class OfflineEnv(BaseTelescope):
             dataset: An object (assumed to be OfflineDECamDataset instance) containing
                      static environment parameters and observation data.
         """
-        # instantiate static attributes
+        # Instantiate static attributes
         self.test_dataset = test_dataset
         self.exp_time = exp_time
         self.slew_time = slew_time
@@ -264,17 +264,25 @@ class OfflineEnv(BaseTelescope):
         self.do_max_norm = test_dataset.do_max_norm
         self.max_norm_feature_names = test_dataset.max_norm_feature_names
         self.do_inverse_airmass = test_dataset.do_inverse_airmass
+        self.include_bin_features = len(test_dataset.bin_feature_names) > 0
 
-        self.bin2fieldradecs = test_dataset.bin2fieldradecs
-        # The following is saved in ../data/*.json files
-        self.bin2fields_in_bin = {int(k): v for k, v in test_dataset.bin2fields_in_bin.items()}
-        self.field2radec = {int(k): v for k, v in test_dataset.field2radec.items()}
-        self.bin2radec = {int(k): v for k, v in test_dataset.bin2radec.items()}
+        # Dataset-wide mappings
+        self.field2radec = test_dataset.field2radec
+        self.field_ids = test_dataset.field_ids
+        self.field_radecs = test_dataset.field_radecs
+
+        # Bin-space dependent function to get fields in bin
+        self.get_fields_in_bin = test_dataset.get_fields_in_bin
+        if not test_dataset.hpGrid.is_azel:
+            self.bin_space = 'radec'
+        else:
+            self.bin_space = 'azel'
+
         self.field2nvisits = {int(fid): int(count) for fid, count in test_dataset.field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
-        self.nbins = len(test_dataset.bin2radec)
 
         self.hpGrid = test_dataset.hpGrid
+        self.nbins = len(self.hpGrid.lon)
         
         self.base_state_feature_names = test_dataset.base_feature_names
         self.base_pointing_feature_names = test_dataset.base_pointing_feature_names
@@ -287,10 +295,13 @@ class OfflineEnv(BaseTelescope):
             self.zscore_means = test_dataset.means.detach().numpy()
             self.zscore_stds = test_dataset.stds.detach().numpy()
 
-        self.pd_nightgroup = test_dataset._df.groupby('night')
+        self.pointing_pd_nightgroup = test_dataset._df.groupby('night')
+        if self.include_bin_features:
+            self.bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
+
         self.max_nights = max_nights
         if max_nights is None:
-            self.max_nights = self.pd_nightgroup.ngroups
+            self.max_nights = self.pointing_pd_nightgroup.ngroups
         if hasattr(test_dataset, 'reward_func'):
             self._reward_func = test_dataset.reward_func
         else:
@@ -304,7 +315,7 @@ class OfflineEnv(BaseTelescope):
             dtype=np.float32,
         )
         # Define action space        
-        self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.hpGrid.npix, len(self.field2radec)]), dtype=np.int32)
+        self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.nbins, len(self.field2radec)]), dtype=np.int32)
 
         self._state = np.zeros(self.obs_dim, dtype=np.float32)
         super().__init__()
@@ -351,7 +362,7 @@ class OfflineEnv(BaseTelescope):
         """
         assert self.action_space.contains(actions), f"Invalid action {actions}"
         action, field_id = np.int32(actions[0]), int(actions[1])
-        assert field_id in self.bin2fields_in_bin[action], f"Field ID {field_id} not in bin {action}"
+        # assert field_id in self.get_fields_in_bin(action), f"Field ID {field_id} not in bin {action}"
         last_field_id = np.int32(self._field_id)
 
         # ------------------- Advance state ------------------- #
@@ -366,10 +377,9 @@ class OfflineEnv(BaseTelescope):
 
         # is_new_night = self._state[-1] >= 1.0 # time_fraction_since_start > = 1.0
         is_new_night = self._timestamp >= self._night_final_timestamp
+        self._is_new_night = is_new_night
         if is_new_night:
             self._start_new_night()
-        else:
-            self._is_new_night = False
         
         # -------------------- Terminate condition -----------------------#
         truncated = False
@@ -392,6 +402,10 @@ class OfflineEnv(BaseTelescope):
         The episode starts at the beginning of the observation window (index 0)
         and with the telescope pointing at the first target field.
         """
+        self._action_mask = np.zeros(self.nbins, dtype=bool)
+        valid_bins = np.arange(len(self.hpGrid.idx_lookup))
+        self._action_mask[valid_bins] = True
+
         if init_state is None:
             self._visited = []
             self._night_idx = -1
@@ -402,15 +416,10 @@ class OfflineEnv(BaseTelescope):
             self._timestamp = options['init_timestamp']
 
             field_id = options['field_id']
-            # field_id = self.fieldname2idx[field_name]
             self._field_id = field_id
-            # self._bin_num = self.fieldname2bin[field_name]
             self._visited = [field_id]
             raise NotImplementedError
         
-        self._action_mask = np.zeros(self.nbins, dtype=bool)
-        valid_bins = np.array(list(self.bin2fields_in_bin.keys()))
-        self._action_mask[valid_bins] = True
     
     def _start_new_night(self):
         self._night_idx +=1
@@ -418,18 +427,39 @@ class OfflineEnv(BaseTelescope):
         if self._night_idx >= self.max_nights:
             return
 
-        first_row_in_night = self.pd_nightgroup.head(1).iloc[self._night_idx]
-        self._night_final_timestamp = self.pd_nightgroup.tail(1).iloc[self._night_idx]['timestamp']
-        self._night_first_timestamp = first_row_in_night['timestamp']
-        self._field_id = first_row_in_night['field_id']
-        self._bin_num = first_row_in_night['bin']
+        # Pointing features
+        first_row_in_night_pointing = self.pointing_pd_nightgroup.head(1).iloc[self._night_idx]
+        self._night_final_timestamp = self.pointing_pd_nightgroup.tail(1).iloc[self._night_idx]['timestamp']
+        self._night_first_timestamp = first_row_in_night_pointing['timestamp']
+        self._field_id = first_row_in_night_pointing['field_id']
+        self._bin_num = first_row_in_night_pointing['bin']
+        # print(first_row_in_night_pointing)
+        self._timestamp = first_row_in_night_pointing['timestamp']
         self._visited.append(self._field_id)
-        self._timestamp = first_row_in_night['timestamp']
+
+        # Bin features
         
         # first_feature_state_in_night = self.test_dataset._get_pointing_features_from_row(row=first_row_in_night)
-        self._state = [first_row_in_night[feat_name] for feat_name in self.state_feature_names]
+        self._pointing_state_features = [first_row_in_night_pointing[feat_name] for feat_name in self.pointing_feature_names]
+        if self.include_bin_features:
+            first_row_in_night_bin = self.bin_pd_nightgroup.head(1).iloc[self._night_idx]
+            self._bin_state_features = [first_row_in_night_bin[feat_name] for feat_name in self.bin_feature_names]
+        else:
+            self._bin_state_features = []
+        self._state = self._pointing_state_features + self._bin_state_features
 
-    def _update_action_mask(self, action): #DONE
+    def _get_azel_action_mask(self, timestamp):
+        # At timestamp, get bins with fields in them
+        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
+        field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
+        field_bins = field_bins[field_bins != None]
+        bins_with_fields = np.unique(field_bins).astype(np.int32)
+        print(bins_with_fields)
+        mask = np.zeros(self.nbins, dtype=bool)
+        mask[bins_with_fields] = True
+        return mask
+
+    def _update_radec_action_mask(self, action, timestamp=None): #DONE
         """
         Updates the boolean mask that tracks valid actions (field IDs).
 
@@ -440,7 +470,7 @@ class OfflineEnv(BaseTelescope):
             action (int): The field ID to check and potentially mask.
         """
         # If all fields in bin are fully visited, bin is no longer valid action
-        for field_id in self.bin2fields_in_bin[action]:
+        for field_id in self.get_fields_in_bin(action, timestamp):
             max_nvisits = self.field2nvisits[field_id]
             if self._visited.count(field_id) < max_nvisits:
                 return
@@ -484,8 +514,10 @@ class OfflineEnv(BaseTelescope):
                 new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
                 new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
 
+
+
         self._state = np.array([new_features.get(feat, 0.0) for feat in self.state_feature_names], dtype=np.float32)
-        self._update_action_mask(action)
+        self._update_action_mask(action, self._timestamp)
         
     def _get_state(self):
         """Converts the current internal state into the formal observation format.
@@ -501,9 +533,10 @@ class OfflineEnv(BaseTelescope):
         self._state = np.array(self._state, dtype=np.float32)
         state_copy = np.array(self._state, dtype=np.float32).copy()
         # state_norm = state_copy
-        state_normed = self._do_noncyclic_normalizations(state=state_copy)
-        self._state_normed = state_normed.copy()
-        return state_normed
+        if not self._is_new_night:
+            state_copy = self._do_noncyclic_normalizations(state=state_copy)
+        self._state_normed = state_copy.copy()
+        return state_copy
 
     def _get_info(self):
         """
@@ -536,11 +569,19 @@ class OfflineEnv(BaseTelescope):
         terminated = self._night_idx >= self.max_nights
         return terminated
 
+    def _update_action_mask(self, action, time):
+        if self.hpGrid.is_azel:
+            self._action_mask = self._get_azel_action_mask(time)
+        if not self.hpGrid.is_azel:
+            self._update_radec_action_mask(action, time)
+
     def _do_noncyclic_normalizations(self, state):
         """Performs z-score normalization on any non-periodic features, including bin-specific features"""
         if self.do_inverse_airmass:
             airmass_mask = np.array(['airmass' in feat_name for feat_name in self.state_feature_names], dtype=bool)
-            state[airmass_mask] = 1.0 / state[airmass_mask]
+            normalized_airmasses = 1.0 / state[airmass_mask]
+            airmasses_fixed_nans = np.where(np.isnan(normalized_airmasses), 10.0, normalized_airmasses)
+            state[airmass_mask] = airmasses_fixed_nans
         
         if self.do_max_norm:
             max_norm_mask = np.array([
