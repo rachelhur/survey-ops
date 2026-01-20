@@ -4,6 +4,7 @@ from collections import defaultdict
 import torch
 import numpy as np
 from tqdm import tqdm
+import time
 from typing import Tuple
 import os
 import pickle
@@ -14,6 +15,7 @@ import logging
 
 # Get the logger associated with this module's name (e.g., 'my_module')
 logger = logging.getLogger(__name__)
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 class Agent:
     """
@@ -56,7 +58,7 @@ class Agent:
             os.makedirs(train_outdir)
         self.train_outdir = train_outdir
         
-    def fit(self, num_epochs, dataset=None, batch_size=None, dataloader=None, eval_freq=100, patience=10):
+    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, eval_freq=100, patience=10, log_freq_in_steps=10):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`
@@ -83,12 +85,13 @@ class Agent:
                 - `test_acc_history`
         """
         # assert dataset is not None and dataloader is not None
-        if dataloader is not None:
+        if trainloader is not None:
             assert batch_size is not None
         
         train_metrics = {
             'train_loss': [],
             'train_qvals': [],
+            'lr': []
         }
 
         val_metrics = {metric: [] for metric in self.algorithm.val_metrics}
@@ -98,60 +101,63 @@ class Agent:
         val_metrics_filepath = self.train_outdir + 'val_metrics.pkl'
         self.algorithm.policy_net.train()
 
-        if dataloader is not None:
+        if trainloader is not None:
             # TODO for v0 only - remove when model is updated for release
-            dataset_size = len(dataloader.dataset)
+            dataset_size = len(trainloader.dataset)
             total_steps = int(num_epochs * dataset_size)
-            loader_iter = iter(dataloader)  # create iterator
+            loader_iter = iter(trainloader)  # create iterator
         else:
             dataset_size = np.prod(dataset.obs.shape[1:])
             total_steps = int(num_epochs * dataset_size / batch_size)
             loader_iter = None  # not used for manual sampling
 
         best_val_loss = 1e5
-        for i_step in tqdm(range(total_steps)):
-            if dataloader is not None:
-                try:
-                    batch = next(loader_iter)
-                except StopIteration:
-                    loader_iter = iter(dataloader)
-                    batch = next(loader_iter)
-            else:
-                batch = dataset.sample(batch_size)
+        with logging_redirect_tqdm():
+            for i_step in tqdm(range(total_steps)):
+                if trainloader is not None:
+                    try:
+                        batch = next(loader_iter)
+                    except StopIteration:
+                        loader_iter = iter(trainloader)
+                        batch = next(loader_iter)
+                else:
+                    batch = dataset.sample(batch_size)
 
-            loss, q_val = self.algorithm.train_step(batch, step_num=i_step)
-            train_metrics['train_loss'].append(loss)
-            train_metrics['train_qvals'].append(q_val)
+                loss, q_val = self.algorithm.train_step(batch, step_num=i_step)
+                if i_step % log_freq_in_steps == 0:
+                    train_metrics['train_loss'].append(loss)
+                    train_metrics['train_qvals'].append(q_val)
+                    train_metrics['lr'].append(self.algorithm.optimizer.param_groups[0]["lr"])
 
-            if i_step % eval_freq == 0:
-                with torch.no_grad():
-                    if dataloader is not None:
-                        # --- evaluation from dataloader ---
-                        try:
-                            eval_batch = next(eval_iter)
-                        except (NameError, StopIteration):
-                            eval_iter = iter(dataloader)
-                            eval_batch = next(eval_iter)
-                    else:
-                        # --- old method fallback ---
-                        eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
+                if i_step % eval_freq == 0:
+                    with torch.no_grad():
+                        if trainloader is not None:
+                            # --- evaluation from dataloader ---
+                            try:
+                                eval_batch = next(eval_iter)
+                            except (NameError, StopIteration):
+                                eval_iter = iter(valloader)
+                                eval_batch = next(eval_iter)
+                        else:
+                            # --- old method fallback ---
+                            eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
-                    val_metric_vals = self.algorithm.test_step(eval_batch)
-                    print(f"Validation check at train step {i_step}: " + " ".join(f"{k} = {v:.3f}" for k, v in zip(val_metrics.keys(), val_metric_vals)))
+                        val_metric_vals = self.algorithm.test_step(eval_batch)
+                        print(f"Validation check at train step {i_step}: " + " ".join(f"{k} = {v:.3f}" for k, v in zip(val_metrics.keys(), val_metric_vals)))
 
-                    for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
-                        val_metrics[metric_name].append(metric_val)
-                    # print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
-                    val_loss_cur = val_metrics['val_loss'][-1]
-                    logger.info(val_loss_cur, best_val_loss)
-                    if val_loss_cur < best_val_loss:
-                        logger.info(f'Improved model at step {i_step}. Saving weights.')
-                        best_val_loss = val_loss_cur
-                        self.save(save_filepath)
-                        with open(train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(train_metrics, handle)
-                        with open(val_metrics_filepath, 'wb') as handle:
-                            pickle.dump(val_metrics, handle)
+                        for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
+                            val_metrics[metric_name].append(metric_val)
+                        # print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
+                        val_loss_cur = val_metrics['val_loss'][-1]
+                        logger.info(val_loss_cur, best_val_loss)
+                        if val_loss_cur < best_val_loss:
+                            logger.info(f'Improved model at step {i_step}. Saving weights.')
+                            best_val_loss = val_loss_cur
+                            self.save(save_filepath)
+                            with open(train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(train_metrics, handle)
+                            with open(val_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_metrics, handle)
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
@@ -188,56 +194,63 @@ class Agent:
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
-        field2nvisits, field2radec = env.unwrapped.field2nvisits, env.unwrapped.field2radec
+        field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
+
         hpGrid = env.unwrapped.test_dataset.hpGrid
         get_fields_in_bin = env.unwrapped.get_fields_in_bin
-        
-        for episode in tqdm(range(num_episodes)):
-            obs, info = env.reset()
-            episode_reward = 0
-            terminated = False
-            truncated = False
-            num_nights = env.unwrapped.max_nights
-            observations = {f'night-{i}': [] for i in range(num_nights)}
-            rewards = {f'night-{i}': [] for i in range(num_nights)}
-            timestamps = {f'night-{i}': [] for i in range(num_nights)}
-            field_ids = {f'night-{i}': [] for i in range(num_nights)}
-            bin_nums = {f'night-{i}': [] for i in range(num_nights)}
+       
+        with logging_redirect_tqdm():
+            for episode in tqdm(range(num_episodes)):
+                obs, info = env.reset()
+                episode_reward = 0
+                terminated = False
+                truncated = False
+                num_nights = env.unwrapped.max_nights
+                observations = {f'night-{i}': [] for i in range(num_nights)}
+                rewards = {f'night-{i}': [] for i in range(num_nights)}
+                timestamps = {f'night-{i}': [] for i in range(num_nights)}
+                fields = {f'night-{i}': [] for i in range(num_nights)}
+                bins = {f'night-{i}': [] for i in range(num_nights)}
+                
+                i = 0
+                reward = 0
+                night_idx = 0
 
-            i = 0
-            reward = 0
-            night_idx = 0
-            while not (terminated or truncated):
-                with torch.no_grad():
-                    timestamp = info.get('timestamp')
-                    observations[f'night-{night_idx}'].append(obs)
-                    rewards[f'night-{night_idx}'].append(reward)
-                    timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
-                    field_ids[f'night-{night_idx}'].append(info.get('field_id'))
-                    bin_nums[f'night-{night_idx}'].append(info.get('bin'))
+                pbar = tqdm(total=250*num_nights, dynamic_ncols=True, desc=f"Rolling out policy for night {night_idx} step {i}")
+                while not (terminated or truncated):
+                    with torch.no_grad():
+                        timestamp = info.get('timestamp')
+                        observations[f'night-{night_idx}'].append(obs)
+                        rewards[f'night-{night_idx}'].append(reward)
+                        timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
+                        fields[f'night-{night_idx}'].append(info.get('field_id'))
+                        bins[f'night-{night_idx}'].append(info.get('bin'))
 
-                    action_mask = info.get('action_mask', None)
-                    action = self.act(obs, action_mask, epsilon=None)
-                    fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp)
-                    field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
+                        action_mask = info.get('action_mask', None)
+                        action = self.act(obs, action_mask, epsilon=None)
+                        fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'))
+                        field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
 
-                    actions = np.array([action, field_id], dtype=np.int32)
-                    obs, reward, terminated, truncated, info = env.step(actions)
-                    episode_reward += reward
-                    night_idx = info.get('night_idx')
-                    i += 1
+                        actions = np.array([action, field_id], dtype=np.int32)
+                        obs, reward, terminated, truncated, info = env.step(actions)
+                        episode_reward += reward
+                        night_idx = info.get('night_idx')
+                        i += 1
+                        pbar.update(1)
+                        pbar.set_description(f"Rolling out policy for night {night_idx} step {i}")
+            pbar.close()
             for night_idx in range(num_nights):
                 observations[f'night-{night_idx}'] = np.array(observations[f'night-{night_idx}'])
                 rewards[f'night-{night_idx}'] = np.array(rewards[f'night-{night_idx}'])
                 timestamps[f'night-{night_idx}'] = np.array(timestamps[f'night-{night_idx}'])
-                field_ids[f'night-{night_idx}'] = np.array(field_ids[f'night-{night_idx}'])
-                bin_nums[f'night-{night_idx}'] = np.array(bin_nums[f'night-{night_idx}'])
+                fields[f'night-{night_idx}'] = np.array(fields[f'night-{night_idx}'])
+                bins[f'night-{night_idx}'] = np.array(bins[f'night-{night_idx}'])
             eval_metrics.update({f'ep-{episode}': {
                 'observations': observations,
                 'rewards': rewards,
                 'timestamp': timestamps,
-                'field_id': field_ids,
-                'bin': bin_nums
+                'field_id': fields,
+                'bin': bins
             }})
 
             episode_rewards.append(episode_reward)
@@ -291,6 +304,7 @@ class Agent:
         """
         Choose field in bin based on interpolated Q-values
         """
+        assert len(fields_in_bin) != 0, "The agent is receiving an empty list for `fields_in_bin`. "
         visited = info.get('visited', None)
         action_mask = info.get('action_mask', None)
         field_ids_in_bin = [fid for fid in fields_in_bin if visited.count(fid) < field2nvisits[fid]]
@@ -308,11 +322,7 @@ class Agent:
             target_lonlats = np.array([field2radec[fid] for fid in field_ids_in_bin])
             
             q_interpolated = interpolate_on_sphere(target_lonlats[:, 0], target_lonlats[:, 1], lon_data, lat_data, q_vals)
-            print(len(q_interpolated), len(field_ids_in_bin))
-            if self.algorithm.name == 'BehaviorCloning':
-                best_idx = np.argmin(q_interpolated)
-            else:
-                best_idx = np.argmax(q_interpolated)
+            best_idx = np.argmax(q_interpolated)
             best_field = field_ids_in_bin[best_idx]
 
             return best_field

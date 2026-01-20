@@ -96,7 +96,8 @@ def create_gif(bin_schedule_filepath, id2pos_filepath, outdir, nside=None, plot_
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
 
     # Test data selection
@@ -223,12 +224,12 @@ def main():
             feat_name = env.unwrapped.test_dataset.state_feature_names[i]
             eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
             eval_data = feature_row.copy()
-            # if feat_name == 'airmass':
-            #     eval_data = 1 / feature_row
-            # elif 'dec' in feat_name or 'el' in feat_name:
-            #     eval_data = feature_row * (np.pi/2)
-            # else:
-            #     eval_data = feature_row
+            if feat_name == 'airmass':
+                eval_data = 1 / feature_row
+            elif 'dec' in feat_name or 'el' in feat_name:
+                eval_data = feature_row * (np.pi/2)
+            else:
+                eval_data = feature_row
             axs[i].plot(eval_timestamps, eval_data, label='policy roll out')
             axs[i].plot(night_group['timestamp'].values, night_group[feat_name].values, label='original schedule')
             axs[i].set_title(feat_name)
@@ -237,25 +238,26 @@ def main():
         plt.close()
 
         # Plot static bin and field radec scatter plots
-        eval_bin_radecs = np.array([env.unwrapped.test_dataset.bin2radec[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
-        orig_bin_radecs = np.array([env.unwrapped.test_dataset.bin2radec[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
+        eval_bin_radecs = np.array([env.unwrapped.test_dataset.bin2coord[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
+        orig_bin_radecs = np.array([env.unwrapped.test_dataset.bin2coord[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
         
         eval_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
         orig_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
         if len(orig_field_radecs) != 1:
             
-            # Plot each night
+            # Plot bins
             fig, axs = plt.subplots(1, 2, figsize=(10,5), sharex=True, sharey=True)
             axs[0].scatter(orig_bin_radecs[:, 0], orig_bin_radecs[:, 1], label='orig schedule', cmap='Reds', c=np.arange(len(orig_bin_radecs)))
             axs[1].scatter(eval_bin_radecs[:, 0], eval_bin_radecs[:, 1], label='policy roll out', cmap='Blues', c=np.arange(len(eval_bin_radecs)))
             for ax in axs:
-                ax.set_xlabel('ra')
+                ax.set_xlabel('x (ra or az)')
                 ax.legend()
-            axs[0].set_ylabel('dec')
+            axs[0].set_ylabel('y (dec or el)')
             fig.suptitle(f'Bins {night_name}')
             fig.savefig(subdir_path + f'bins_ra_vs_dec.png')
             plt.close()
             
+            # Plot fields
             fig, axs = plt.subplots(1, 2, figsize=(10,5), sharex=True, sharey=True)
             axs[0].scatter(orig_field_radecs[:, 0], orig_field_radecs[:, 1], label='orig schedule', cmap='Reds', c=np.arange(len(orig_field_radecs)), s=10)
             axs[1].scatter(eval_field_radecs[:, 0], eval_field_radecs[:, 1], label='policy roll out', cmap='Blues', c=np.arange(len(eval_field_radecs)), s=10)

@@ -122,8 +122,6 @@ def load_raw_data_to_dataframe(fits_path, json_path):
         df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
     return df
 
-
-
 def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
     # Save timestamps, field_ids, and bin numbers
     _timestamps = eval_metrics['ep-0']['timestamp'] \

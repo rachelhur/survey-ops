@@ -263,7 +263,6 @@ class BehaviorCloning(AlgorithmBase):
             # mask invalid actions
             action_logits[~mask] = float('inf')
             action = torch.argmin(action_logits, dim=1)
-            print(action)
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
 
     # def predict(self, state):

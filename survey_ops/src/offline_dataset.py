@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from survey_ops.utils import units
 from survey_ops.utils import ephemerides
+from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
 import healpy as hp
 
 import pandas as pd
@@ -18,8 +19,10 @@ import datetime
 import astropy
 import logging
 
+
 # Get the logger associated with this module's name (e.g., 'my_module')
 logger = logging.getLogger(__name__)
+
 
 def get_lst(timestamp):
     t = astropy.time.Time(timestamp, format='unix', scale='utc')
@@ -62,7 +65,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.z_score_feature_names = []
         self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
         self.max_norm_feature_names = ['dec', 'el'] if self.do_max_norm else []
-        self.calculate_action_mask = calculate_action_mask # should be False if using bc (to minimize data processing time), otherwise True
+        self._calculate_action_mask = calculate_action_mask # should be False if using bc (to minimize data processing time), otherwise True
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
@@ -90,13 +93,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Dynamically assign self.get_fields_in_bin -- fields in azel depend on time, fields in radec are static
         if self.hpGrid.is_azel:
            # If bins in azel, fields in bin depend on timestamp      
-            self.get_fields_in_bin = self._get_fields_in_azel_bin
+            self.get_fields_in_bin = get_fields_in_azel_bin
         else:
             # If bins in radec, exists a static file with fields in bin for all times
             bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
             with open(bin2fields_in_bin_filepath, 'r') as f:
                 self.bin2fields_in_bin = json.load(f)
-            self.get_fields_in_bin = self._get_fields_in_radec_bin
+            self.get_fields_in_bin = get_fields_in_radec_bin
 
         # Process dataframe to add columns for pointing features
         df = self._process_dataframe(df, self.pointing_feature_names, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
@@ -223,7 +226,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             
             airmass_mask = torch.tensor(np.array(['airmass' in feat_name for feat_name in self.state_feature_names]), dtype=torch.bool)
             self.states[:, airmass_mask] = 1.0 / self.states[:, airmass_mask]
-            self.next_states[:, airmass_mask] = 1.0
+            self.next_states[:, airmass_mask] = 1.0 / self.next_states[:, airmass_mask]
         
         if self.do_max_norm:
             max_norm_mask = torch.tensor(np.array([
@@ -513,15 +516,19 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return rewards
 
     def _construct_action_masks(self, timestamps, num_transitions):
+        """
+        Constructs action masks only with the condition that bins outside of horizon are masked
+        """
         # given timestamp, determine bins which are outside of observable range
         els = np.empty((num_transitions, self.num_actions))
-        if self.calculate_action_mask:
+        if self._calculate_action_mask:
             if not self.hpGrid.is_azel:
                 lon, lat = self.hpGrid.lon, self.hpGrid.lat
                 for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc="Calculating action mask"):
                     _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
                 self._els = els
                 action_mask = els > 0
+
             else:
                 action_mask = self.hpGrid.lat > 0
         else:
@@ -542,8 +549,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 row_dict['night'] = nights[i_row]
                 row_dict['sun_ra'], row_dict['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=time)
                 row_dict['moon_ra'], row_dict['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=time)
-                row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'])
-                row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'])
+                row_dict['sun_az'], row_dict['sun_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['sun_ra'], dec=row_dict['sun_dec'], time=time)
+                row_dict['moon_az'], row_dict['moon_el'] = ephemerides.equatorial_to_topographic(ra=row_dict['moon_ra'], dec=row_dict['moon_dec'], time=time)
                 total_time_in_night = original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[-1] - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]
                 row_dict['time_fraction_since_start'] = (time - original_df.groupby('night').get_group(row_dict['night'])['timestamp'].values[0]) / total_time_in_night if total_time_in_night > 0 else 0
                 # Get zenith bin if radec bin space
@@ -594,17 +601,20 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
         return zenith_df
-
-    def _get_fields_in_azel_bin(self, bin_num, timestamp):
-        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
-        field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
-        fields_in_bin = self.field_ids[field_bins == bin_num]
-        return fields_in_bin
     
-    def _get_fields_in_radec_bin(self, bin_num, timestamp=None):
-        return self.bin2fields_in_bin.get(bin_num)
+    # def _get_fields_in_azel_bin(self, bin_num, timestamp):
+    #     incomplete_fields_mask = np.array([self._visited.count(fid) < self.field2nvisits[fid] for fid in self.field_ids])
+    #     fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
+    #     field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
+    #     fields_in_bin = self.field_ids[field_bins == bin_num and incomplete_fields_mask]
+    #     return fields_in_bin
+    
+    # def _get_fields_in_radec_bin(self, bin_num, timestamp=None):
+    #     return self.bin2fields_in_bin.get(bin_num)
 
-    def get_dataloader(self, batch_size, num_workers, pin_memory):
+    def get_dataloader(self, batch_size, num_workers, pin_memory, random_seed):
+        generator = torch.Generator()
+        generator.manual_seed(random_seed)
         loader = DataLoader(
             self,
             batch_size,
@@ -616,6 +626,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             drop_last=True, # drops last non-full batch
             num_workers=num_workers,
             pin_memory=pin_memory,
+            generator=generator
         )
         return loader
 

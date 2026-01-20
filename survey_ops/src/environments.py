@@ -8,6 +8,7 @@ from survey_ops.utils import ephemerides, units
 from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
+from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
 
 
 class BaseTelescope(gym.Env):
@@ -272,11 +273,14 @@ class OfflineEnv(BaseTelescope):
         self.field_radecs = test_dataset.field_radecs
 
         # Bin-space dependent function to get fields in bin
-        self.get_fields_in_bin = test_dataset.get_fields_in_bin
         if not test_dataset.hpGrid.is_azel:
             self.bin_space = 'radec'
+            self.bin2fields_in_bin = test_dataset.bin2fields_in_bin
+            self.get_fields_in_bin = get_fields_in_radec_bin
+
         else:
             self.bin_space = 'azel'
+            self.get_fields_in_bin = get_fields_in_azel_bin
 
         self.field2nvisits = {int(fid): int(count) for fid, count in test_dataset.field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
@@ -375,9 +379,9 @@ class OfflineEnv(BaseTelescope):
 
         # -------------------- Start new night if last transition -----------------------#
 
-        # is_new_night = self._state[-1] >= 1.0 # time_fraction_since_start > = 1.0
         is_new_night = self._timestamp >= self._night_final_timestamp
         self._is_new_night = is_new_night
+        
         if is_new_night:
             self._start_new_night()
         
@@ -423,7 +427,6 @@ class OfflineEnv(BaseTelescope):
     
     def _start_new_night(self):
         self._night_idx +=1
-        self._is_new_night = True
         if self._night_idx >= self.max_nights:
             return
 
@@ -433,7 +436,6 @@ class OfflineEnv(BaseTelescope):
         self._night_first_timestamp = first_row_in_night_pointing['timestamp']
         self._field_id = first_row_in_night_pointing['field_id']
         self._bin_num = first_row_in_night_pointing['bin']
-        # print(first_row_in_night_pointing)
         self._timestamp = first_row_in_night_pointing['timestamp']
         self._visited.append(self._field_id)
 
@@ -449,15 +451,17 @@ class OfflineEnv(BaseTelescope):
         self._state = self._pointing_state_features + self._bin_state_features
 
     def _get_azel_action_mask(self, timestamp):
-        # At timestamp, get bins with fields in them
-        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
-        field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
-        field_bins = field_bins[field_bins != None]
-        bins_with_fields = np.unique(field_bins).astype(np.int32)
-        print(bins_with_fields)
-        mask = np.zeros(self.nbins, dtype=bool)
-        mask[bins_with_fields] = True
-        return mask
+        """
+        Returns action_mask which masks bins that are invalid, ie bins that are below horizon or bins that contain completely observed fields (defined by field2nvisits)
+        """
+        incomplete_fields_mask = np.array([self._visited.count(fid) < self.field2nvisits[fid] for fid in self.field_ids])
+        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[incomplete_fields_mask, 0], dec=self.field_radecs[incomplete_fields_mask, 1], time=timestamp)
+        field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el) # returns None if (az, el) below horizon
+        field_bins = field_bins[field_bins != None].astype(np.int32)
+        action_mask = np.zeros(shape=self.nbins, dtype=bool)
+        action_mask[field_bins] = True
+
+        return action_mask
 
     def _update_radec_action_mask(self, action, timestamp=None): #DONE
         """
@@ -470,7 +474,7 @@ class OfflineEnv(BaseTelescope):
             action (int): The field ID to check and potentially mask.
         """
         # If all fields in bin are fully visited, bin is no longer valid action
-        for field_id in self.get_fields_in_bin(action, timestamp):
+        for field_id in self.get_fields_in_bin(bin_num=action, bin2fields_in_bin=self.bin2fields_in_bin):
             max_nvisits = self.field2nvisits[field_id]
             if self._visited.count(field_id) < max_nvisits:
                 return
@@ -532,11 +536,9 @@ class OfflineEnv(BaseTelescope):
 
         self._state = np.array(self._state, dtype=np.float32)
         state_copy = np.array(self._state, dtype=np.float32).copy()
-        # state_norm = state_copy
-        if not self._is_new_night:
-            state_copy = self._do_noncyclic_normalizations(state=state_copy)
-        self._state_normed = state_copy.copy()
-        return state_copy
+        state_normed = self._do_noncyclic_normalizations(state=state_copy)
+        self._state_normed = state_normed.copy()
+        return state_normed
 
     def _get_info(self):
         """
@@ -560,13 +562,16 @@ class OfflineEnv(BaseTelescope):
         Checks if the episode has reached its termination condition.
 
         Termination occurs when the total number of observations for the night
-        (based on the dataset) has been met or exceeded.
+        (based on the dataset) has been met, or, when all fields have been completely
+        visited.
 
         Returns
         -------
             bool: True if the episode is terminated, False otherwise.
         """
-        terminated = self._night_idx >= self.max_nights
+        all_nights_completed = self._night_idx >= self.max_nights
+        all_fields_visited = all(np.array([self._visited.count(fid) >= self.field2nvisits[fid] for fid in self.field_ids]))
+        terminated = all_nights_completed or all_fields_visited
         return terminated
 
     def _update_action_mask(self, action, time):

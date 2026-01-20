@@ -20,23 +20,30 @@ def plot_loss_curve(results_outdir):
         train_metrics = pickle.load(f)
     with open(results_outdir + 'val_metrics.pkl', 'rb') as f:
         val_metrics = pickle.load(f)
+    
+    val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
+
     fig, axs = plt.subplots(2, sharex=True, figsize=(5, 5))
+
     axs[0].plot(train_metrics['train_loss'])
+    axs[0].plot(val_steps, val_metrics['val_loss'], label='val loss')
     axs[0].hlines(y=0, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[0].set_ylabel('Loss', fontsize=14)
-    axs[1].plot(np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy'])), val_metrics['accuracy'])
+    axs[0].legend()
+
+    axs[1].plot(val_steps, val_metrics['accuracy'])
     axs[1].hlines(y=1, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
     axs[1].set_xlabel('Train step', fontsize=14)
     axs[1].set_ylabel('Accuracy', fontsize=14)
     axs[1].set_xlabel('Train step', fontsize=14)
     
     fig.tight_layout()
-    fig.savefig(results_outdir + 'figures/' + 'train_history.png')
+    fig.savefig(results_outdir + 'figures/' + 'loss_history.png')
     plt.show()
 
 def main():
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
     
     # Data input and output file and dir setups
@@ -133,13 +140,23 @@ def main():
     colors = [f'C{i}' for i in range(7)]
     for i, (bin_id, g) in enumerate(train_dataset._df.groupby('bin')):
         plt.scatter(g.ra, g.dec, label=bin_id, color=colors[i%len(colors)], s=1)
-    plt.savefig(fig_outdir + 'train_data_dec_vs_ra.png')
+    plt.title("Fields in train data, colored by bin membership")
+    plt.xlabel('ra')
+    plt.ylabel('dec')
+    plt.savefig(fig_outdir + 'train_data_fields_dec_vs_ra.png')
 
-
+    fig, axs = plt.subplots(len(train_dataset.state_feature_names), figsize=(4, len(train_dataset.state_feature_names)*3))
+    for i, feat_row in enumerate(train_dataset.next_states.T):
+        axs[i].hist(feat_row)
+        axs[i].set_title(f"Train distribution ({train_dataset.state_feature_names[i]})")
+    fig.tight_layout()
+    fig.savefig(fig_outdir + 'train_data_state_feature_distributions.png')
+        
     with open(results_outdir + 'offline_dataset_config.pkl', 'wb') as f:
         pickle.dump(OFFLINE_DATASET_CONFIG, f)
     
-    trainloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False)
+    trainloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed)
+    valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=np.random.randint(low=0, high=10000))
 
     # Initialize algorithm and agent
     logger.info("Initializing agent...")
@@ -160,7 +177,8 @@ def main():
     start_time = time.time()
     agent.fit(
         num_epochs=args.num_epochs,
-        dataloader=trainloader,
+        trainloader=trainloader,
+        valloader=valloader,
         batch_size=args.batch_size,
         eval_freq=100,
         patience=args.patience
