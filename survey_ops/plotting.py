@@ -12,6 +12,8 @@ from matplotlib.patches import Polygon
 from matplotlib import cm, colors
 from matplotlib.ticker import MaxNLocator
 from tqdm import tqdm
+from scipy.stats import circmean
+from collections import Counter
 
 
 class SkyMap:
@@ -410,6 +412,8 @@ def plot_bins(
     plot_galaxy=True,
     plot_moon=True,
     sky_bin_mapping=None,
+    observer=None,
+    skymap=None,
 ):
     """
     Initialize a sky view binned into healpix grid. Optionally highlight select pixels.
@@ -442,18 +446,23 @@ def plot_bins(
     sky_bin_mapping : dict [None]
         If provided, is used to validate that the recreated healpix grid matches the
         provided grid.
+    observer : ephem.Observer [None]
+        An observer instance. Defaults to blanco_observer at specified time.
+    skymap : SkyMap [None]
+        A SkyMap plot instance on which to plot. Defaults to creating a new instance.
 
     Returns
     -------
     skymap : SkyMap instance
         The created figure.
     """
-    from collections import Counter
 
     # initialize figure at selected time
-    observer = ephemerides.blanco_observer(time=time)
+    observer = ephemerides.blanco_observer(time=time) if observer is None else observer
     zenith_ra, zenith_dec = ephemerides.get_source_ra_dec("zenith", observer=observer)
-    skymap = SkyMap(center_ra=zenith_ra, center_dec=zenith_dec)
+    skymap = (
+        SkyMap(center_ra=zenith_ra, center_dec=zenith_dec) if skymap is None else skymap
+    )
 
     # set title to selected time
     plt.title(
@@ -689,6 +698,203 @@ def plot_bins_movie(
     return
 
 
+def plot_schedule_whole(
+    outfile,
+    times,
+    field_pos=None,
+    bin_idxs=None,
+    alternate_bin_idxs=None,
+    nside=None,
+    sky_bin_mapping=None,
+    projection="mollweide",
+    center_pos=(None, None),
+):
+    """
+    Creates an image of the areas visited at any point in the schedule on a Mollweide
+    sky projection. Optionally plots bins or fields.
+
+    Arguments
+    ---------
+    outfile : str
+        Path to output image file.
+    times : list of float
+        List of times (Unix timestamps, in UTC) of observations.
+    field_pos : list of float tuples [None]
+        List of field (ra, dec) for each observation. If provided, plots specific fields
+        visited at any point during the schedule.
+    bin_idxs : list of int [None]
+        List of bin indices for each observation. If provided, expects nside. Plots the
+        sky bins visited at any point during the schedule, colored by number of times
+        visited.
+    alternate_bin_idxs : list of int [None]
+        List of bin indices for each observation in an alternate schedule. If provided,
+        expects nside. Plots the difference in the sky bins visited at any point during
+        the provided schedules, colored by the difference in number of times visited.
+    nside : int [None]
+        nside used to make the ephemerides.HealpixGrid. Required if bin_idxs provided.
+    sky_bin_mapping : dict [None]
+        If provided, is used to validate that the recreated healpix grid matches the
+        provided grid.
+    projection : str ["mollweide"]
+        Map projection. Options: ortho/orthographic, moll/mollweide, hammer, aitoff
+    center_pos : float tuple (None, None)
+        Center (ra, dec) for the map. Default plots the average (ra, dec) for the
+        schedule, using field positions instead of bin positions if available.
+    """
+
+    # check required arguments
+    if field_pos is None and bin_idxs is None:
+        raise ValueError("Must provide field_pos and/or bin_idxs")
+    if bin_idxs is not None and nside == 0:
+        raise ValueError("Must specify nside if plotting bin_idxs")
+    if alternate_bin_idxs is not None and bin_idxs is None:
+        raise ValueError("Provide bin_idxs when also specifying an alternate schedule")
+
+    # make sure field pos is numpy array
+    field_pos = None if field_pos is None else np.asarray(field_pos, dtype=float)
+
+    # re-create the healpix grid
+    hpgrid = None
+    if bin_idxs is not None:
+        hpgrid = ephemerides.HealpixGrid(nside=nside, is_azel=False)
+        if sky_bin_mapping is not None:
+            assert len(sky_bin_mapping) == len(hpgrid.lon)
+            for idx, (lon, lat) in sky_bin_mapping.items():
+                assert int(idx) == hpgrid.ang2idx(lon=lon, lat=lat)
+
+    # calculate center ra, dec
+    center_ra, center_dec = center_pos
+    if center_ra is None:
+        ra = field_pos[:, 0] if field_pos is not None else hpgrid.lon[bin_idxs]
+        center_ra = circmean(ra, nan_policy="omit")
+    if center_dec is None:
+        dec = field_pos[:, 1] if field_pos is not None else hpgrid.lat[bin_idxs]
+        center_dec = np.nanmean(dec)
+
+    # initialize figure with selected central positioning
+    observer = ephemerides.blanco_observer(time=np.mean(times))
+    skymap = SkyMap(center_ra=center_ra, center_dec=center_dec, projection=projection)
+
+    # plot sky bins
+    if bin_idxs is not None:
+        # plot the healpix grid lines
+        ra, dec = hpgrid.get_pixel_boundaries(step=2)
+        for r, d in zip(ra, dec):
+            skymap.plot(ra=r, dec=d, color="pink", linewidth=0.8, linestyle=":")
+
+        # determine colors for counts of visits to each bin_idx
+        if alternate_bin_idxs is None:
+            counts = Counter(bin_idxs)
+
+            def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=256):
+                return colors.LinearSegmentedColormap.from_list(
+                    f"trunc({cmap.name},{minval:.2f},{maxval:.2f})",
+                    cmap(np.linspace(minval, maxval, n)),
+                )
+
+            cmap = truncate_colormap(cm.Greys, 0.3, 1.0)
+            norm = colors.Normalize(vmin=1, vmax=max(counts.values()))
+            clabel = "Number of observations"
+
+        # determine colors for differences between provided schedules
+        else:
+            counts = Counter(bin_idxs)
+            counts.subtract(Counter(alternate_bin_idxs))
+            cmap = cm.PRGn
+            vscale = max(abs(max(counts.values())), abs(min(counts.values())))
+            norm = colors.Normalize(vmin=-vscale, vmax=vscale)
+            clabel = "Difference in number of observations"
+
+        # shade in the sky bin counts
+        for idx, count in counts.items():
+            if idx != -1 and count != 0:
+                skymap.poly(
+                    ra=ra[idx],
+                    dec=dec[idx],
+                    facecolor=cmap(norm(count)),
+                    alpha=0.6,
+                    zorder=9,
+                )
+
+        # colorbar for sky bin counts
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = skymap.fig.colorbar(
+            sm, ax=skymap.ax, orientation="vertical", fraction=0.046, pad=0.07
+        )
+        cbar.locator = MaxNLocator(integer=True)
+        cbar.set_label(clabel)
+
+    # plot fields
+    if field_pos is not None:
+        # color the fields by time
+        keep = np.all(~np.isnan(field_pos), axis=1)
+        cmap = cm.viridis
+        norm = colors.Normalize(vmin=min(times[keep]), vmax=max(times[keep]))
+        c = cmap(norm(times[keep]))
+
+        # plot the actual fields
+        skymap.scatter(
+            ra=field_pos[keep, 0],
+            dec=field_pos[keep, 1],
+            edgecolor=c,
+            facecolor=c if bin_idxs is None else "none",
+            alpha=0.6 if bin_idxs is None else 1.0,
+            zorder=10,
+            marker="H",
+            s=60 if "ortho" in projection else 20,
+        )
+
+        # colorbar for fields
+        ts = np.linspace(min(times[keep]), max(times[keep]), 5)
+        ls = [
+            datetime.fromtimestamp(t, tz=timezone.utc).strftime("%m/%d %H:%M")
+            for t in ts
+        ]
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = skymap.fig.colorbar(sm, ax=skymap.ax, label="Datetime")
+        cbar.set_ticks(ticks=ts, labels=ls, rotation=45, va="bottom")
+
+    # plot lines through the galactic plane
+    l = np.linspace(0, 360, 100) * units.deg
+    b = np.zeros_like(l)
+    ra, dec = ephemerides.galactic_to_equatorial(l=l, b=b)
+    skymap.plot(ra=ra, dec=dec, color="gray", zorder=10, linewidth=0.8)
+    for offset in [5 * units.deg, -5 * units.deg]:
+        ra, dec = ephemerides.galactic_to_equatorial(l=l, b=b + offset)
+        skymap.plot(
+            ra=ra, dec=dec, color="gray", zorder=10, linestyle="--", linewidth=0.8
+        )
+
+    # plot the moon
+    ra, dec = ephemerides.get_source_ra_dec(source="moon", observer=observer)
+    skymap.scatter(
+        ra=ra,
+        dec=dec,
+        facecolor="darkgrey",
+        edgecolor="black",
+        marker="o",
+        s=300 if "ortho" in projection else 100,
+    )
+
+    # set plot title
+    plt.title(
+        datetime.fromtimestamp(times[0], tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
+        + " UTC -- "
+        + datetime.fromtimestamp(times[-1], tz=timezone.utc).strftime(
+            "%Y/%m/%d %H:%M:%S"
+        )
+        + " UTC"
+    )
+
+    # save the figure
+    plt.savefig(outfile)
+    plt.close(skymap.fig)
+
+    return
+
+
 if __name__ == "__main__":
     import json
     import argparse as ap
@@ -703,7 +909,7 @@ if __name__ == "__main__":
         "--outfile",
         type=str,
         required=True,
-        help="Path to output gif file.",
+        help="Path to output file (expects .gif for movies).",
     )
     parser.add_argument(
         "-s",
@@ -725,6 +931,12 @@ if __name__ == "__main__":
             'Whether to plot schedule of "field", "bin", or combined "fieldbin". '
             'Requires "(policy_)field_id" and/or "(policy_)bin_id" keys, respectively.'
         ),
+    )
+    parser.add_argument(
+        "-w",
+        "--whole",
+        action="store_true",
+        help="Switch to plot the whole schedule on a flat sky. Default plots movies.",
     )
     parser.add_argument(
         "-c",
@@ -771,6 +983,12 @@ if __name__ == "__main__":
         type=int,
         help="nside used to make healpix sky bin for bin schedules",
     )
+    parser.add_argument(
+        "-m",
+        "--mollweide",
+        action="store_true",
+        help="Use Mollweide projection for instead of default Ortho.",
+    )
     args = parser.parse_args()
 
     # check argument compatibility
@@ -778,8 +996,10 @@ if __name__ == "__main__":
         raise ValueError("field file required to plot fields.")
     if args.plot_type in ["bin", "fieldbin"] and args.nside is None:
         raise ValueError("nside required to plot bins.")
-    if args.plot_type == "field" and args.compare:
+    if args.plot_type == "field" and args.compare and not args.whole:
         raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
+    if args.mollweide and not args.whole:
+        raise NotImplementedError("Currently, can only plot ortho for movies.")
 
     # load schedule file and check validity
     schedule = pd.read_csv(args.schedule)
@@ -808,17 +1028,58 @@ if __name__ == "__main__":
 
     # parse field, bin positions
     field_ids_1 = schedule.get("policy_field_id" if args.policy else "field_id", None)
+    field_ids_2 = schedule.get("field_id" if args.policy else "policy_field_id", None)
     if field_ids_1 is None or field_id2pos is None:
         field_pos_1 = None
     else:
         field_pos_1 = np.asarray(
             [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
         )
+    if field_ids_2 is None or field_id2pos is None:
+        field_pos_2 = None
+    else:
+        field_pos_2 = np.asarray(
+            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_2.values]
+        )
     bin_ids_1 = schedule.get("policy_bin_id" if args.policy else "bin_id", None)
     bin_ids_2 = schedule.get("bin_id" if args.policy else "policy_bin_id", None)
 
     # call plotting functions
-    if args.plot_type == "field":
+    if args.whole:
+        if not args.compare:  # 1 plot of plot_type style
+            ofs = [args.outfile]
+            fps = [field_pos_1 if args.plot_type in ["field", "fieldbin"] else None]
+            bis = [bin_ids_1 if args.plot_type in ["bin", "fieldbin"] else None]
+            abis = [None]
+        else:  # 2 (field) or 3 (bin/fieldbin) plots when comparing
+            base, ext = os.path.splitext(args.outfile)
+            if "bin" in args.plot_type:
+                ofs = [base + "_%s" % i + ext for i in range(3)]
+                fps = (
+                    [field_pos_1, field_pos_2, None]
+                    if "field" in args.plot_type
+                    else [None, None, None]
+                )
+                bis = [bin_ids_1, bin_ids_2, bin_ids_1]
+                abis = [None, None, bin_ids_2]
+            else:
+                ofs = [base + "_%s" % i + ext for i in range(2)]
+                fps = [field_pos_1, field_pos_2]
+                bis = [None, None]
+                abis = [None, None]
+        for i, (of, fp, bi, abi) in enumerate(zip(ofs, fps, bis, abis)):
+            plot_schedule_whole(
+                outfile=of,
+                times=schedule["time"].values,
+                field_pos=fp,
+                bin_idxs=bi,
+                alternate_bin_idxs=abi,
+                nside=args.nside,
+                sky_bin_mapping=bin_id2pos,
+                projection="mollweide" if args.mollweide else "ortho",
+                center_pos=(None, None),
+            )
+    elif args.plot_type == "field":
         plot_fields_movie(
             outfile=args.outfile,
             times=schedule["time"].values,
