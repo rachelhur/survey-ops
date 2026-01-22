@@ -1,4 +1,5 @@
 import numpy as np
+from survey_ops.utils import units
 
 
 def angular_separation(pos1, pos2):
@@ -38,3 +39,26 @@ def angular_separation(pos1, pos2):
         ),
         sin_el1 * sin_el2 + cos_el1 * cos_el2 * cos_daz,
     )
+
+
+def blanco_slew_time(distance):
+    """
+    Calculate the approximate time to slew some angular distance in between observations
+    with the Blanco telescope, approximated from historic data.
+
+    Arguments
+    ---------
+    distance : float
+        The angular distance on the sky between two fields.
+
+    Returns
+    -------
+    time : float
+        The overhead + slew time in between observations separated by distance.
+    """
+
+    # hardcoded linear fit parameters
+    rate = 2.3342091388075774 * (units.sec / units.deg)
+    intercept = 27.20906999686867 * units.sec
+
+    return rate * distance + intercept
