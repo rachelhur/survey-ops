@@ -11,6 +11,7 @@ import matplotlib.patheffects as pe
 from matplotlib.patches import Polygon
 from matplotlib import cm, colors
 from matplotlib.ticker import MaxNLocator
+from matplotlib.collections import LineCollection
 from tqdm import tqdm
 from scipy.stats import circmean
 from collections import Counter
@@ -190,6 +191,23 @@ class SkyMap:
         # outline the text
         if outline is not None:
             txt.set_path_effects([pe.withStroke(linewidth=5, foreground=outline)])
+
+    def line_collection(self, ra, dec, **kwargs):
+        """
+        Plots a collection of lines on the map.
+
+        Arguments
+        ---------
+        ra, dec : array of floats
+            RA and Dec coords to plot, expects 2d numpy arrays where each row is a line
+        kwargs
+            Options to pass to matplotlib.collections.LineCollection
+        """
+        lons = self.ra_to_lon(ra) / units.deg
+        lats = np.asarray(dec) / units.deg
+        lines = [np.column_stack([lon, lat]) for lon, lat in zip(lons, lats)]
+        lc = LineCollection(lines, transform=self.input_crs, **kwargs)
+        self.ax.add_collection(lc)
 
 
 def plot_fields(
@@ -478,13 +496,24 @@ def plot_bins(
             assert int(idx) == hpgrid.ang2idx(lon=lon, lat=lat)
 
     # plot the healpix grid lines
-    ra, dec = hpgrid.get_pixel_boundaries(step=2)
+    ra, dec = hpgrid.get_pixel_boundaries(step=2, loop=True)
     if is_azel:
         ra, dec = ephemerides.topographic_to_equatorial(
             az=ra, el=dec, observer=observer
         )
-    for r, d in zip(ra, dec):
-        skymap.plot(ra=r, dec=d, color="pink", linewidth=0.8, linestyle=":")
+    keep = (
+        hpgrid.get_source_angular_separations("zenith", observer=observer)
+        < 90 * units.deg
+    )  # save time: plot bins above horizon
+    skymap.line_collection(
+        ra=ra[
+            keep, : ra.shape[1] // 2 + 1
+        ],  # save time, no overlap: plot half the boundary
+        dec=dec[keep, : ra.shape[1] // 2 + 1],
+        color="pink",
+        linewidths=0.8,
+        linestyles=":",
+    )
 
     # mark the current sky bin
     skymap.poly(
@@ -778,9 +807,16 @@ def plot_schedule_whole(
     # plot sky bins
     if bin_idxs is not None:
         # plot the healpix grid lines
-        ra, dec = hpgrid.get_pixel_boundaries(step=2)
-        for r, d in zip(ra, dec):
-            skymap.plot(ra=r, dec=d, color="pink", linewidth=0.8, linestyle=":")
+        ra, dec = hpgrid.get_pixel_boundaries(step=2, loop=True)
+        skymap.line_collection(
+            ra=ra[
+                :, : ra.shape[1] // 2 + 1
+            ],  # save time, no overlap: plot half the boundary
+            dec=dec[:, : ra.shape[1] // 2 + 1],
+            color="pink",
+            linewidths=0.8,
+            linestyles=":",
+        )
 
         # determine colors for counts of visits to each bin_idx
         if alternate_bin_idxs is None:
