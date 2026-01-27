@@ -306,7 +306,7 @@ class HealpixGrid:
         else:
             return self.idx_lookup.get(heal_idx, None)
 
-    def get_pixel_boundaries(self, idx=None, step=1):
+    def get_pixel_boundaries(self, idx=None, step=1, loop=True):
         """
         For each pixel stored in the grid, computes the pixel boundaries of the pixel in
         the grid's native lon/lat coordinates (az/el if is_azel is True, else RA/Dec).
@@ -318,6 +318,8 @@ class HealpixGrid:
         step : int [1]
             Number of elements for each side of the pixel. Default 1 returns only the
             corners of the pixels
+        loop : bool [True]
+            Whether to loop back to the starting point for each boundary.
 
         Returns
         -------
@@ -343,6 +345,12 @@ class HealpixGrid:
 
         # resize boundaries into lon/lat arrays of expected format
         boundaries_lon, boundaries_lat = np.reshape(boundaries, (2, len(idx), 4 * step))
+
+        # loop back to starting point if requested
+        # shape: n_pixels x (4*step + 1)
+        if loop:
+            boundaries_lon = np.hstack([boundaries_lon, boundaries_lon[:, 0:1]])
+            boundaries_lat = np.hstack([boundaries_lat, boundaries_lat[:, 0:1]])
 
         # apply units
         boundaries_lon *= units.deg
