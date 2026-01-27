@@ -11,10 +11,10 @@ import matplotlib.patheffects as pe
 from matplotlib.patches import Polygon
 from matplotlib import cm, colors
 from matplotlib.ticker import MaxNLocator
-from tqdm import tqdm
 
 from tqdm import tqdm
-
+import pandas as pd
+import json
 
 class SkyMap:
     """
@@ -363,7 +363,6 @@ def plot_fields_movie(outfile, times, field_pos):
     decs : list of float
         List of declinations (in radians) for each observation.
     """
-
     # ensure output file is gif
     if os.path.splitext(outfile)[-1] not in [".gif"]:
         raise NotImplementedError("Only animated gif currently supported.")
@@ -603,6 +602,7 @@ def plot_bins_movie(
     alternate_idxs=None,
     sky_bin_mapping=None,
     field_pos=None,
+    is_azel=False
 ):
     """
     Creates a gif of fields observed over the course of a night.
@@ -654,6 +654,7 @@ def plot_bins_movie(
             future_idxs=idxs[i + 1 :],
             nside=nside,
             sky_bin_mapping=sky_bin_mapping,
+            is_azel=is_azel
         )
 
         # plot the sky fields on the sky map
@@ -689,9 +690,72 @@ def plot_bins_movie(
     shutil.rmtree(tmpdir)
 
     return
+    
+def run_plotting(outfile, schedule: str, plot_type: str, bins: str, fields: str, nside: int, compare: bool, policy: bool, is_azel: bool):
+    # check argument compatibility
+    if plot_type in ["field", "fieldbin"] and len(fields) == 0:
+        raise ValueError("field file required to plot fields.")
+    if plot_type in ["bin", "fieldbin"] and nside is None:
+        raise ValueError("nside required to plot bins.")
+    if plot_type == "field" and compare:
+        raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
 
+    # load schedule file and check validity
+    schedule = pd.read_csv(schedule)
+    if "time" not in schedule.columns:
+        raise KeyError('Missing "time" required to make requested plot.')
+    if plot_type in ["field", "fieldbin"]:
+        if policy and "policy_field_id" not in schedule.columns:
+            raise KeyError('Missing "policy_field_id" required to make requested plot.')
+        if not policy and "field_id" not in schedule.columns:
+            raise KeyError('Missing "field_id" required to make requested plot.')
+    if plot_type in ["bin", "fieldbin"]:
+        if (compare or policy) and "policy_bin_id" not in schedule.columns:
+            raise KeyError('Missing "policy_bin_id" required to make requested plot.')
+        if (compare or not policy) and "bin_id" not in schedule.columns:
+            raise KeyError('Missing "bin_id" required to make requested plot.')
 
-if __name__ == "__main__":
+    # load field and bin mappings
+    field_id2pos = None
+    if fields is not None:
+        with open(fields) as f:
+            field_id2pos = json.load(f)
+    bin_id2pos = None
+    if bins is not None:
+        with open(bins) as f:
+            bin_id2pos = json.load(f)
+
+    # parse field, bin positions
+    field_ids_1 = schedule.get("policy_field_id" if policy else "field_id", None)
+    if field_ids_1 is None or field_id2pos is None:
+        field_pos_1 = None
+    else:
+        field_pos_1 = np.asarray(
+            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
+        )
+    bin_ids_1 = schedule.get("policy_bin_id" if policy else "bin_id", None)
+    bin_ids_2 = schedule.get("bin_id" if policy else "policy_bin_id", None)
+
+    # call plotting functions
+    if plot_type == "field":
+        plot_fields_movie(
+            outfile=outfile,
+            times=schedule["time"].values,
+            field_pos=field_pos_1,
+        )
+    else:
+        plot_bins_movie(
+            outfile=outfile,
+            nside=nside,
+            times=schedule["time"].values,
+            idxs=bin_ids_1.values,
+            alternate_idxs=bin_ids_2.values if compare else None,
+            sky_bin_mapping=bin_id2pos,
+            field_pos=field_pos_1 if plot_type == "fieldbin" else None,
+            is_azel=is_azel
+        )
+
+def main(cli_args=None):
     import json
     import argparse as ap
     import pandas as pd
@@ -775,64 +839,17 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # check argument compatibility
-    if args.plot_type in ["field", "fieldbin"] and len(args.fields) == 0:
-        raise ValueError("field file required to plot fields.")
-    if args.plot_type in ["bin", "fieldbin"] and args.nside is None:
-        raise ValueError("nside required to plot bins.")
-    if args.plot_type == "field" and args.compare:
-        raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
+    run_plotting(
+    outfile=args.outfile,
+    schedule=args.schedule,
+    plot_type=args.plot_type,
+    compare=args.compare,
+    policy=args.policy,
+    fields=args.fields,
+    bins=args.bins,
+    nside=args.nside,
+    is_azel=args.is_azel
+)
 
-    # load schedule file and check validity
-    schedule = pd.read_csv(args.schedule)
-    if "time" not in schedule.columns:
-        raise KeyError('Missing "time" required to make requested plot.')
-    if args.plot_type in ["field", "fieldbin"]:
-        if args.policy and "policy_field_id" not in schedule.columns:
-            raise KeyError('Missing "policy_field_id" required to make requested plot.')
-        if not args.policy and "field_id" not in schedule.columns:
-            raise KeyError('Missing "field_id" required to make requested plot.')
-    if args.plot_type in ["bin", "fieldbin"]:
-        if (args.compare or args.policy) and "policy_bin_id" not in schedule.columns:
-            raise KeyError('Missing "policy_bin_id" required to make requested plot.')
-        if (args.compare or not args.policy) and "bin_id" not in schedule.columns:
-            raise KeyError('Missing "bin_id" required to make requested plot.')
-
-    # load field and bin mappings
-    field_id2pos = None
-    if args.fields is not None:
-        with open(args.fields) as f:
-            field_id2pos = json.load(f)
-    bin_id2pos = None
-    if args.bins is not None:
-        with open(args.bins) as f:
-            bin_id2pos = json.load(f)
-
-    # parse field, bin positions
-    field_ids_1 = schedule.get("policy_field_id" if args.policy else "field_id", None)
-    if field_ids_1 is None or field_id2pos is None:
-        field_pos_1 = None
-    else:
-        field_pos_1 = np.asarray(
-            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
-        )
-    bin_ids_1 = schedule.get("policy_bin_id" if args.policy else "bin_id", None)
-    bin_ids_2 = schedule.get("bin_id" if args.policy else "policy_bin_id", None)
-
-    # call plotting functions
-    if args.plot_type == "field":
-        plot_fields_movie(
-            outfile=args.outfile,
-            times=schedule["time"].values,
-            field_pos=field_pos_1,
-        )
-    else:
-        plot_bins_movie(
-            outfile=args.outfile,
-            nside=args.nside,
-            times=schedule["time"].values,
-            idxs=bin_ids_1.values,
-            alternate_idxs=bin_ids_2.values if args.compare else None,
-            sky_bin_mapping=bin_id2pos,
-            field_pos=field_pos_1 if args.plot_type == "fieldbin" else None,
-        )
+if __name__ == "__main__":
+    main()

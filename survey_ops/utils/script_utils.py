@@ -3,6 +3,7 @@ import os
 import pickle
 import sys
 import logging
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
@@ -13,7 +14,12 @@ from survey_ops.src.offline_dataset import OfflineDECamDataset
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
 import torch.nn as nn
 
-def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, lr_scheduler_kwargs=None, gamma=None, tau=None):
+
+
+def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
+                    lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_step_freq=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None):
+    
+    # Set up model hyperparameters that are algorithm independent
     model_hyperparams = {
         'obs_dim': obs_dim,
         'num_actions': num_actions, 
@@ -21,8 +27,11 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
         'lr': lr,
         'lr_scheduler': lr_scheduler,
         'lr_scheduler_kwargs': lr_scheduler_kwargs,
+        'lr_scheduler_step_freq': lr_scheduler_step_freq,
+        'lr_scheduler_epoch_start': lr_scheduler_epoch_start,
+        'lr_scheduler_num_epochs': lr_scheduler_num_epochs,
     }
-
+        
     if algorithm_name == 'ddqn' or algorithm_name == 'dqn':
         assert gamma is not None, "Gamma (discount factor) must be specified for DDQN."
         assert tau is not None, "Tau (target network update rate) must be specified for DDQN."
@@ -80,8 +89,12 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
 
 def setup_logger(save_dir, logging_filename):
     # Create logger
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
+
+    # Avoid duplicate handlers if called twice
+    if logger.handlers:
+        return logger
     
     # Create handlers
     console_handler = logging.StreamHandler(sys.stdout)
@@ -110,10 +123,10 @@ def load_raw_data_to_dataframe(fits_path, json_path):
     try:
         # --- Load json df ---- #
         df = pd.read_json(json_path)
-        print('Loaded data from json')
+        logger.info('Loaded data from json')
     except:
         # --- Load fits ---- #
-        print(json_path, 'DNE. Loading and processing data from fits.')
+        logger.info(f"Could not find json file {json_path}. Processing data from fits file {fits_path}.")
         d = fitsio.read(fits_path)
         sel = (d['propid'] == '2012B-0001') & (d['exptime'] > 40) & (d['exptime'] < 100) & (~np.isnan(d['teff']))
         selected_d = d[sel]

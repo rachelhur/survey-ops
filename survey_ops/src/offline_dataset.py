@@ -15,6 +15,7 @@ import json
 import os
 import time
 import datetime
+from torch.utils.data import random_split, RandomSampler
 
 import astropy
 import logging
@@ -52,6 +53,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 do_max_norm=True,
                 do_inverse_airmass=True,
                 calculate_action_mask=True,
+                objects_to_remove: list = ['guide', 'DES vvds', 'J0', 'gwh', 'DESGW', 'Alhambra-8', 'cosmos', 'COSMOS hex', 'TMO', 'LDS', 'WD0', 'DES supernova hex', 'NGC', 'ec']
                 ):
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
@@ -61,6 +63,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.do_cyclical_norm = do_cyclical_norm
         self.do_max_norm = do_max_norm
         self.do_inverse_airmass = do_inverse_airmass
+        self.objects_to_remove = objects_to_remove
 
         self.z_score_feature_names = []
         self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
@@ -220,24 +223,27 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return feature_names
 
     def _do_noncyclic_normalizations(self):
-        logger.info("Performing normalizations")
         """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
         if self.do_inverse_airmass:
-            
+            logger.info('Performing inverse airmass normalization')
             airmass_mask = torch.tensor(np.array(['airmass' in feat_name for feat_name in self.state_feature_names]), dtype=torch.bool)
             self.states[:, airmass_mask] = 1.0 / self.states[:, airmass_mask]
             self.next_states[:, airmass_mask] = 1.0 / self.next_states[:, airmass_mask]
         
         if self.do_max_norm:
+            logger.info('Performing max normalziation')
+            logger.debug('(First need to get mask to mask out all state features which do not use this normalization)')
             max_norm_mask = torch.tensor(np.array([
                 any(max_feat in feat_name for max_feat in self.max_norm_feature_names)
                 for feat_name in self.state_feature_names
                 ], dtype=bool), dtype=torch.bool)
+            logger.debug('(Then divide by max val for each feature)')
             self.states[:, max_norm_mask] = self.states[:, max_norm_mask] / (np.pi/2)
             self.next_states[:, max_norm_mask] = self.next_states[:, max_norm_mask] / (np.pi/2)
 
         # z-score normalization for any non-periodic features
         if self.do_z_score_norm:
+            logger.info("Performing z-score normalizations")
             z_score_mask = torch.tensor(np.array([
                 any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
                 for feat_name in self.state_feature_names
@@ -300,6 +306,17 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         df_relabelled.loc[outlier_indices, 'object'] = [f'{obj_name} (outlier)' for obj_name in df.loc[outlier_indices, 'object'].values]
         return df_relabelled
 
+    def _remove_specific_nights(self, objects_to_remove, df):
+        nights_with_special_fields = set()
+        for i, spec_obj in enumerate(objects_to_remove):
+            for night, subdf in df.groupby('night'):
+                if any(spec_obj in obj_name for obj_name in subdf['object'].values):
+                    nights_with_special_fields.add(night)
+        
+        nights_to_remove_mask = df['night'].isin(nights_with_special_fields)
+        df = df[~nights_to_remove_mask]
+        return df
+
     def _process_dataframe(self, df, pointing_feature_names, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
         """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
@@ -314,6 +331,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df = df[df['night'].dt.day.isin(specific_days)]
         if specific_filters is not None:
             df = df[df['filter'].isin(specific_filters)]
+
+        # Remove specific nights according to object name
+        df = self._remove_specific_nights(objects_to_remove=self.objects_to_remove, df=df)
 
         # Remove observations in 1970 - what are these?
         df = df[df['night'].dt.year != 1970]
@@ -612,25 +632,50 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     # def _get_fields_in_radec_bin(self, bin_num, timestamp=None):
     #     return self.bin2fields_in_bin.get(bin_num)
 
-    def get_dataloader(self, batch_size, num_workers, pin_memory, random_seed):
-        generator = torch.Generator()
-        generator.manual_seed(random_seed)
-        loader = DataLoader(
-            self,
+    def get_dataloader(self, batch_size, num_workers, pin_memory, random_seed, drop_last=True, val_split=.1, return_train_and_val=True):
+        generator = torch.Generator().manual_seed(random_seed)
+    
+        # Split dataset
+        train_size = int(len(self) * (1 - val_split))
+        val_size = len(self) - train_size
+        train_dataset, val_dataset = random_split(self, [train_size, val_size], generator=generator)
+        
+        # Train loader
+        train_loader = DataLoader(
+            train_dataset,
             batch_size,
-            sampler=RandomSampler(
-                self,
-                replacement=True,
-                num_samples=10**10,
-            ),
-            drop_last=True, # drops last non-full batch
+            sampler=RandomSampler(train_dataset, replacement=True, num_samples=10**10),
+            drop_last=drop_last,
             num_workers=num_workers,
             pin_memory=pin_memory,
             generator=generator
         )
-        return loader
+        if return_train_and_val:
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size,
+                shuffle=False,
+                drop_last=False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+            return train_loader, val_loader
+        return train_loader
 
-
+        # loader = DataLoader(
+        #     self,
+        #     batch_size,
+        #     sampler=RandomSampler(
+        #         self,
+        #         replacement=True,
+        #         num_samples=10**10,
+        #     ),
+        #     drop_last=drop_last, # drops last non-full batch
+        #     num_workers=num_workers,
+        #     pin_memory=pin_memory,
+        #     generator=generator
+        # )
+ 
 class ToyDatasetv0:
     """
     A dataset wrapper converting a nightly telescope schedule into a structured transition dataset.

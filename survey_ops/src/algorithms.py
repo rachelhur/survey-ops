@@ -46,7 +46,7 @@ class DDQN(AlgorithmBase):
     """
 
     def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, target_update_freq=1000, loss_fxn=None, use_double=True, \
-                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={}):
+                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={}, lr_scheduler_step_freq=100):
         super().__init__()
         self.name = 'DDQN'
         self.gamma = gamma
@@ -64,6 +64,9 @@ class DDQN(AlgorithmBase):
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
+        if self.lr_scheduler is not None:
+            self.lr_scheduler_step_freq = lr_scheduler_step_freq
+        # Tmax needs to equal number of scheduler steps at end of training
         assert loss_fxn is not None
         self.loss_fxn = loss_fxn
         self.val_metrics = ['val_loss', 'q_policy', 'q_data', 'val_accuracy']
@@ -119,7 +122,7 @@ class DDQN(AlgorithmBase):
         # print(f"Max Gradient Norm: {prev_grad_norm.item()}")
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         self.optimizer.step()
-        if self.lr_scheduler is not None:
+        if self.lr_scheduler is not None and step_num % self.lr_scheduler_step_freq == 0:
             self.lr_scheduler.step()
         
         if step_num % self.target_update_freq == 0:
@@ -184,7 +187,7 @@ class DDQN(AlgorithmBase):
             td_target = rewards + self.gamma * next_q_vals * (1 - dones)
             
             # Compute TD error/loss
-            loss = F.mse_loss(q_current, td_target)
+            loss = self.loss_fxn(q_current, td_target)
 
             mean_accuracy = (predicted_actions == actions).float().mean()
 
@@ -195,19 +198,30 @@ class DDQN(AlgorithmBase):
             return loss, q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item()
             
 class BehaviorCloning(AlgorithmBase):
-    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, device='cpu'):
+    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
+                 lr_scheduler_step_freq=10, lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu'):
         self.name = 'BehaviorCloning'
         self.device = device
         self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
+
         assert loss_fxn is not None, "loss_fxn needs to be passed"
         self.loss_fxn = loss_fxn
+        
         if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
             assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
+
         self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
-        self.val_metrics = ['val_loss', 'logit', 'accuracy']
+
+        if lr_scheduler is not None:
+            logger.debug(f'BC lr_scheduler is {self.lr_scheduler}')
+            self.lr_scheduler_step_freq = lr_scheduler_step_freq
+            self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
+            self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
+
+        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy','accuracy']
         
-    def train_step(self, batch, step_num):
+    def train_step(self, batch, epoch_num, step_num):
         """
         Train the policy to mimic expert actions from offline data
         """
@@ -231,10 +245,18 @@ class BehaviorCloning(AlgorithmBase):
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
-        if self.lr_scheduler is not None:
+        do_lr_scheduler_step = (self.lr_scheduler is not None
+                                and step_num % self.lr_scheduler_step_freq == 0
+                                and epoch_num >= self.lr_scheduler_epoch_start
+                                and epoch_num <= self.lr_scheduler_num_epochs
+        )
+        if do_lr_scheduler_step:
+        # if self.lr_scheduler is not None and step_num % self.lr_scheduler_step_freq == 0 and self.lr_scheduler and step_num >= self.lr_scheduler_start:
             self.lr_scheduler.step()
+            last_lr = self.lr_scheduler.get_last_lr()[0]
+            print(f"Stepping lr scheduler at epoch {epoch_num} with lr {last_lr}")
 
-        return loss.item(), action_logits.mean().item()
+        return loss.item(), None
     
     def test_step(self, batch):
         eval_obs, expert_actions, rewards, next_obs, dones, action_masks = batch
@@ -250,7 +272,24 @@ class BehaviorCloning(AlgorithmBase):
 
             accuracy = (predicted_actions == expert_actions).float().mean()
             
-        return loss.item(), action_logits.mean().item(), accuracy.item()
+            # Get logp(a_expert|state)
+            logp = F.log_softmax(action_logits, dim=-1)
+            logp_expert_actions = logp.gather(1, expert_actions.unsqueeze(1)).squeeze(1)
+
+            # Get action margin
+            _, num_actions = action_logits.shape
+            # expert logit: (B,)
+            z_expert = action_logits.gather(1, expert_actions.unsqueeze(1)).squeeze(1)
+            expert_mask = F.one_hot(expert_actions, num_classes=num_actions).bool()
+            # max logit among non-expert actions
+            z_max_other = action_logits.masked_fill(expert_mask, float("-inf")).max(dim=1).values
+            margin = (z_expert - z_max_other).mean()
+
+            # Get policy entrop (p(a_i|s)logp(a_i|s))
+            p = F.softmax(action_logits, dim=-1)
+            entropy = -(p * logp).sum(dim=-1)
+
+        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), accuracy.item()
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
@@ -261,8 +300,9 @@ class BehaviorCloning(AlgorithmBase):
             mask = mask.to(self.device, dtype=torch.bool).unsqueeze(0)
             action_logits = self.policy_net(obs)
             # mask invalid actions
-            action_logits[~mask] = float('inf')
-            action = torch.argmin(action_logits, dim=1)
+            action_logits[~mask] = float('-inf')
+            action = torch.argmax(action_logits, dim=1)
+
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()
 
     # def predict(self, state):

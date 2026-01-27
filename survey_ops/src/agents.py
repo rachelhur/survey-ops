@@ -58,7 +58,7 @@ class Agent:
             os.makedirs(train_outdir)
         self.train_outdir = train_outdir
         
-    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, eval_freq=100, patience=10, log_freq_in_steps=10):
+    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, patience=10, train_log_freq=10):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`
@@ -73,9 +73,6 @@ class Agent:
                 Number of passes through the dataset (used to compute steps).
             batch_size (int):
                 Number of transitions per optimization step.
-            eval_freq (int):
-                Frequency (in optimization steps) at which evaluation batches
-                are sampled and accuracy is recorded.
 
         Saves:
             - `<outdir>/weights.pt`: Final model weights.
@@ -95,25 +92,41 @@ class Agent:
         }
 
         val_metrics = {metric: [] for metric in self.algorithm.val_metrics}
+        val_train_metrics = {metric: [] for metric in self.algorithm.val_metrics}
 
         save_filepath = self.train_outdir + 'best_weights.pt'
         train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
         val_metrics_filepath = self.train_outdir + 'val_metrics.pkl'
+        val_train_metrics_filepath = self.train_outdir + 'val_train_metrics.pkl'
         self.algorithm.policy_net.train()
 
         if trainloader is not None:
-            # TODO for v0 only - remove when model is updated for release
             dataset_size = len(trainloader.dataset)
-            total_steps = int(num_epochs * dataset_size)
+            steps_per_epoch = dataset_size // batch_size
+            total_steps = int(num_epochs * steps_per_epoch) # ie, total number of times dataset is sampled
             loader_iter = iter(trainloader)  # create iterator
         else:
+            # TODO for v0 only - remove when model is updated for release
             dataset_size = np.prod(dataset.obs.shape[1:])
             total_steps = int(num_epochs * dataset_size / batch_size)
             loader_iter = None  # not used for manual sampling
 
         best_val_loss = 1e5
+        patience_cur = patience
+        i_epoch = 0
+
+        steps_per_epoch = len(trainloader.dataset) // batch_size
+        total_steps = int(num_epochs * steps_per_epoch)
+
+        # total_lr_scheduler_steps = int(args.lr_scheduler_max_epochs * iterations_per_epoch // args.lr_scheduler_step_freq)
+        logger.info(f"Total number of training steps: {total_steps}")
+        logger.info(f"Steps per epoch: {steps_per_epoch}")
+        logger.debug(f"Total number of lr scheduler steps: {self.algorithm.lr_scheduler_num_epochs if self.algorithm.lr_scheduler is not None else None}")
+        logger.debug(f"Number of transitions in dataset: {len(trainloader.dataset)}")
+
         with logging_redirect_tqdm():
-            for i_step in tqdm(range(total_steps)):
+            pbar = tqdm(total=total_steps, dynamic_ncols=True, desc="Starting training")
+            for i_step in range(total_steps):
                 if trainloader is not None:
                     try:
                         batch = next(loader_iter)
@@ -123,14 +136,22 @@ class Agent:
                 else:
                     batch = dataset.sample(batch_size)
 
-                loss, q_val = self.algorithm.train_step(batch, step_num=i_step)
-                if i_step % log_freq_in_steps == 0:
+                if i_step % steps_per_epoch == 0:
+                    i_epoch += 1
+                    
+                pbar.update(1)
+
+                pbar.set_description(f"Epoch {i_epoch}/{int(num_epochs)} (step {i_step}/{total_steps})")
+                loss, q_val = self.algorithm.train_step(batch, epoch_num=i_epoch, step_num=i_step)
+                if i_step % train_log_freq == 0:
                     train_metrics['train_loss'].append(loss)
                     train_metrics['train_qvals'].append(q_val)
                     train_metrics['lr'].append(self.algorithm.optimizer.param_groups[0]["lr"])
+                    logger.debug(f"current LR is {train_metrics['lr'][-1]}")
 
-                if i_step % eval_freq == 0:
-                    with torch.no_grad():
+                # At end of each epoch, do validation check
+                with torch.no_grad():
+                    if i_step % steps_per_epoch == 0:
                         if trainloader is not None:
                             # --- evaluation from dataloader ---
                             try:
@@ -143,21 +164,42 @@ class Agent:
                             eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
                         val_metric_vals = self.algorithm.test_step(eval_batch)
-                        print(f"Validation check at train step {i_step}: " + " ".join(f"{k} = {v:.3f}" for k, v in zip(val_metrics.keys(), val_metric_vals)))
+                        val_train_metric_vals = self.algorithm.test_step(batch)
 
                         for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
                             val_metrics[metric_name].append(metric_val)
-                        # print(f"Train step {i_step}: Accuracy = {accuracy:.3f}, Loss = {eval_loss.item():.4f}, Q-val={q_vals.item():.3f}")
+                        for metric_name, metric_val in zip(val_train_metrics.keys(), val_train_metric_vals):
+                            val_train_metrics[metric_name].append(metric_val)
+
+                        logger.info(
+                            f"Validation check at train step {i_step} \n " + \
+                                " ".join(
+                                    f"{k} = {v:.3f} | " for k, v in zip(val_metrics.keys(), val_metric_vals)
+                                ) + "\n" + \
+                                " ".join(
+                                    f"{k + ' (train batch)'} = {v:.3f} | " for k, v in zip(val_train_metrics.keys(), val_train_metric_vals)
+                                )
+                        )
+
                         val_loss_cur = val_metrics['val_loss'][-1]
-                        logger.info(val_loss_cur, best_val_loss)
-                        if val_loss_cur < best_val_loss:
-                            logger.info(f'Improved model at step {i_step}. Saving weights.')
-                            best_val_loss = val_loss_cur
-                            self.save(save_filepath)
-                            with open(train_metrics_filepath, 'wb') as handle:
-                                pickle.dump(train_metrics, handle)
-                            with open(val_metrics_filepath, 'wb') as handle:
-                                pickle.dump(val_metrics, handle)
+
+                    if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
+                        best_val_loss = val_loss_cur
+                        patience_cur = patience
+                        logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
+                        self.save(save_filepath)
+                        with open(train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(train_metrics, handle)
+                        with open(val_metrics_filepath, 'wb') as handle:
+                            pickle.dump(val_metrics, handle)
+                        with open(val_train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(val_train_metrics, handle)
+                    else:
+                        patience_cur -= 1
+                        logger.debug(f"Patience left: {patience_cur}")
+                        if patience_cur == 0:
+                            logger.info("No patience left. Ending training.")
+                            break
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
@@ -194,10 +236,12 @@ class Agent:
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
-        field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
 
-        hpGrid = env.unwrapped.test_dataset.hpGrid
+        # TODO: save these somewhere as some config instead of using env.unwrapped
         get_fields_in_bin = env.unwrapped.get_fields_in_bin
+        field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
+        bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
+        hpGrid = env.unwrapped.test_dataset.hpGrid # change to nside and recreate healpix
        
         with logging_redirect_tqdm():
             for episode in tqdm(range(num_episodes)):
@@ -211,7 +255,7 @@ class Agent:
                 timestamps = {f'night-{i}': [] for i in range(num_nights)}
                 fields = {f'night-{i}': [] for i in range(num_nights)}
                 bins = {f'night-{i}': [] for i in range(num_nights)}
-                
+                                
                 i = 0
                 reward = 0
                 night_idx = 0
@@ -228,7 +272,7 @@ class Agent:
 
                         action_mask = info.get('action_mask', None)
                         action = self.act(obs, action_mask, epsilon=None)
-                        fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'))
+                        fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'), bin2fields_in_bin=bin2fields_in_bin)
                         field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
 
                         actions = np.array([action, field_id], dtype=np.int32)
@@ -254,7 +298,7 @@ class Agent:
             }})
 
             episode_rewards.append(episode_reward)
-            print(f'terminated at step {i}')
+            logger.info(f'terminated at step {i}')
 
         eval_metrics.update({
             'mean_reward': np.mean(episode_rewards),
@@ -266,7 +310,7 @@ class Agent:
 
         with open(eval_outdir + 'eval_metrics.pkl', 'wb') as handle:
             pickle.dump(eval_metrics, handle)
-            print(f'eval_metrics.pkl saved in {eval_outdir}')
+            logger.info(f'eval_metrics.pkl saved in {eval_outdir}')
 
     def act(self, obs, action_mask, epsilon):
         """Selects an action using the underlying algorithm.

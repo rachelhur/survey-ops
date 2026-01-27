@@ -2,6 +2,7 @@ import os
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 import torch
 import torch.nn.functional as F
@@ -25,11 +26,14 @@ from survey_ops.src.offline_dataset import OfflineDECamDataset
 
 import argparse
 
-def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None):
+def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None, is_azel=False):
     # Save timestamps, field_ids, and bin numbers
+    bin_space = 'azel' if is_azel else 'radec'
+    
     _timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}'] \
                 if len(eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']) > len(pd_group['timestamp']) \
-                else pd_group['timestamp'] 
+                else pd_group['timestamp']
+    
     eval_field_schedule = {
         'time': _timestamps,
         'field_id': eval_metrics['ep-0']['field_id'][f'night-{night_idx}']
@@ -66,7 +70,7 @@ def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, ma
             if 'bin' in filename:
                 create_gif(
                     bin_schedule_filepath=output_filepath, 
-                    id2pos_filepath=f'../data/nside{nside}_bin2radec.json',
+                    id2pos_filepath=f'../data/nside{nside}_bin2{bin_space}.json',
                     outdir=save_dir,
                     nside=nside
                     )
@@ -124,10 +128,17 @@ def main():
 
     # Set up logging
     logger = setup_logger(save_dir=results_outdir, logging_filename='eval.log')
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("pytorch").setLevel(logging.WARNING)
+    logging.getLogger("numpy").setLevel(logging.WARNING)
+    logging.getLogger("gymnasium").setLevel(logging.WARNING)
+    logging.getLogger("fontconfig").setLevel(logging.WARNING)
+    logging.getLogger("cartopy").setLevel(logging.WARNING)
+
     logger.info("Saving results in " + results_outdir)
 
     # Print args
-    logger.debug("Experiment parameters:")
+    logger.warning("Experiment parameters:")
     for key, value in args_dict.items():
         logger.info(f"{key}: {value}")
 
@@ -143,6 +154,7 @@ def main():
     with open(args.trained_model_dir + 'offline_dataset_config.pkl', 'rb') as f:
         OFFLINE_DATASET_CONFIG = pickle.load(f)
     nside = OFFLINE_DATASET_CONFIG['nside']
+    bin_space = OFFLINE_DATASET_CONFIG['bin_space']
 
 
     logger.info("Loading test dataset with same config as training dataset...")
@@ -150,6 +162,13 @@ def main():
                                     #    args.binning_method, args.nside, args.bin_space, args.test_specific_years, args.test_specific_months, args.test_specific_days, \
                                         # args.no_bin_features, args.no_cyclical_norm, args.no_max_norm, args.no_inverse_airmass)
     
+    # Plot State x action space via cornerplot
+    corner_plot = sns.pairplot(test_dataset._df,
+             vars=test_dataset.pointing_feature_names + ['bin'],
+             kind='hist',
+             corner=True
+            )
+    corner_plot.figure.savefig(results_outdir + 'state_times_action_space_corner_plot.png')
 
     with open(args.trained_model_dir + 'model_hyperparams.pkl', 'rb') as f:
         model_hyperparams = pickle.load(f)
@@ -172,6 +191,29 @@ def main():
 
     env = gym.make(id=f"gymnasium_env/{env_name}", test_dataset=test_dataset, max_nights=None)
 
+    # Plot predicted action for each state
+    with torch.no_grad():
+        q_vals = agent.algorithm.policy_net(test_dataset.states.to(device))
+        eval_actions = torch.argmax(q_vals, dim=1).to('cpu').detach().numpy()
+    
+    # Sequence of actions from target (original schedule) and policy
+    target_sequence = test_dataset.actions.detach().numpy()
+    eval_sequence = eval_actions
+    first_night_indices = np.where(test_dataset.states[:, -1] == 0)
+
+    fig, axs = plt.subplots(2, figsize=(10,5), sharex=True)
+    
+    axs[0].plot(target_sequence, marker='*', alpha=.3, label='true')
+    axs[0].plot(eval_sequence, marker='o', alpha=.3, label='pred')
+    axs[0].legend()
+    axs[0].set_ylabel('bin number')
+    axs[0].vlines(first_night_indices, ymin=0, ymax=len(test_dataset.hpGrid.lon), color='black', linestyle='--')
+    axs[1].plot(eval_sequence - target_sequence, marker='o', alpha=.5)
+    axs[1].set_ylabel('Eval sequence - target sequence \n[bin number]')
+    axs[1].set_xlabel('observation index')
+    fig.savefig(results_outdir + 'train_eval_and_target_bin_sequences.png')
+
+    # Roll out policy
     logger.info("Starting evaluation...")
     agent.evaluate(env=env, num_episodes=args.num_episodes, field_choice_method='random', eval_outdir=results_outdir)
     logger.info("Evaluation complete.")
@@ -190,32 +232,46 @@ def main():
         subdir_path = results_outdir + date_str + '/'
         if not os.path.exists(subdir_path):
             os.makedirs(subdir_path)
-        
+
+        # Plot bins vs timestamp        
+        fig_b, axb = plt.subplots()
+        axb.plot(eval_metrics[f'ep-{ep_num}']['timestamp'][f'night-{night_idx}'],
+                      eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'],
+                      marker='o', label='pred', alpha=.5)
+        axb.plot(night_group['timestamp'],
+                      night_group['bin'].values.astype(int),
+                      marker='o', label='true', alpha=.5)
+        axb.legend()
+        axb.set_ylabel('bin')
+
         # Plot bins vs step
-        fig_b, axs_b = plt.subplots(2, figsize=(10,7), sharex=True)
-        axs_b[0].plot(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'], marker='o', label='pred', alpha=.5)
-        axs_b[0].plot(night_group['bin'].values.astype(int), marker='o', label='true', alpha=.5)
-        axs_b[0].legend()
-        axs_b[0].set_ylabel('bin')
-        axs_b[1].plot(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'][:len(night_group['bin'].values.astype(int))] \
-                    - night_group['bin'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'])])
-        axs_b[1].set_ylabel('bin' + '\n (residuals)')
+        # fig_b, axs_b = plt.subplots(2, figsize=(10,7), sharex=True)
+        # axs_b[0].plot(eval_metrics[f'ep-{ep_num}']['timestamp'][f'night-{night_idx}'],
+        #               eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'],
+        #               marker='o', label='pred', alpha=.5)
+        # axs_b[0].plot(night_group['timestamp'],
+        #               night_group['bin'].values.astype(int),
+        #               marker='o', label='true', alpha=.5)
+        # axs_b[0].legend()
+        # axs_b[0].set_ylabel('bin')
+        # axs_b[1].plot(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'][:len(night_group['bin'].values.astype(int))] \
+                    # - night_group['bin'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'])])
+        # axs_b[1].set_ylabel('bin' + '\n (residuals)')
         fig_b.suptitle(date_str)
         fig_b.savefig(subdir_path + f'bin_vs_step.png')
         plt.close()
         
-        # Plot fields vs step
-        fig_f, axs_f = plt.subplots(2, figsize=(10,7), sharex=True)
-        axs_f[0].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'], marker='o', label='pred', alpha=.5)
-        axs_f[0].plot(night_group['field_id'].values.astype(int), marker='o', label='true', alpha=.5)
-        axs_f[0].legend()
-        axs_f[0].set_ylabel('field_id')
-        axs_f[1].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'][:len(night_group['field_id'].values.astype(int))] \
-                    - night_group['field_id'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'])])
-        axs_f[1].set_ylabel('field_id' + '\n (residuals)')
-            
-        fig_f.suptitle(date_str)
-        fig_f.savefig(subdir_path  + f'field_id_vs_step.png')
+        # # Plot fields vs step
+        # fig_f, axs_f = plt.subplots(2, figsize=(10,7), sharex=True)
+        # axs_f[0].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'], marker='o', label='pred', alpha=.5)
+        # axs_f[0].plot(night_group['field_id'].values.astype(int), marker='o', label='true', alpha=.5)
+        # axs_f[0].legend()
+        # axs_f[0].set_ylabel('field_id')
+        # axs_f[1].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'][:len(night_group['field_id'].values.astype(int))] \
+        #             - night_group['field_id'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'])])
+        # axs_f[1].set_ylabel('field_id' + '\n (residuals)')
+        # fig_f.suptitle(date_str)
+        # fig_f.savefig(subdir_path  + f'field_id_vs_step.png')
         plt.close()
 
         # Plot state features vs timestamp for first episode
@@ -230,11 +286,11 @@ def main():
                 eval_data = feature_row * (np.pi/2)
             else:
                 eval_data = feature_row
-            axs[i].plot(eval_timestamps, eval_data, label='policy roll out')
-            axs[i].plot(night_group['timestamp'].values, night_group[feat_name].values, label='original schedule')
+            axs[i].plot(eval_timestamps, eval_data, label='policy roll out', marker='o')
+            axs[i].plot(night_group['timestamp'].values, night_group[feat_name].values, label='original schedule', marker='o')
             axs[i].set_title(feat_name)
             axs[i].legend()
-        fig.savefig(subdir_path + f'state_features_vs_timestep.png')
+        fig.savefig(subdir_path + f'state_features_vs_timestamp.png')
         plt.close()
 
         # Plot static bin and field radec scatter plots
@@ -270,7 +326,25 @@ def main():
             plt.close()
 
         logger.info(f'Creating schedule gif for {night_idx}th night')
-        save_field_and_bin_schedules(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gif=True)
+        save_field_and_bin_schedules(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gif=False, is_azel=test_dataset.hpGrid.is_azel)
+        
+        from survey_ops.plotting import run_plotting
+        # Plot bins
+        run_plotting(
+            outfile=subdir_path + "bin_schedule.gif",
+            schedule=subdir_path + "bin_schedule.csv",
+            plot_type="bin",
+            bins=f"../data/nside16_bin2{bin_space}.json",
+            fields=None,
+            nside=nside,
+            compare=True,
+            policy=False,
+            is_azel=test_dataset.hpGrid.is_azel
+            )
+        
+        # Plot fields
+
+        # Plot both
 
 if __name__ == "__main__":
     main()

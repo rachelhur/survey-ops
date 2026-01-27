@@ -277,10 +277,11 @@ class OfflineEnv(BaseTelescope):
             self.bin_space = 'radec'
             self.bin2fields_in_bin = test_dataset.bin2fields_in_bin
             self.get_fields_in_bin = get_fields_in_radec_bin
-
+            print('SETTING FUNCTION TO BE GET_FIELDS_IN_RADEC_BIN')
         else:
             self.bin_space = 'azel'
             self.get_fields_in_bin = get_fields_in_azel_bin
+            self.bin2fields_in_bin = None
 
         self.field2nvisits = {int(fid): int(count) for fid, count in test_dataset.field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
@@ -415,6 +416,8 @@ class OfflineEnv(BaseTelescope):
             self._night_idx = -1
             self._is_new_night = True
             self._start_new_night()
+            if self.bin_space == 'radec':
+                self._mask_completed_bins = np.ones(self.nbins, dtype=bool) # Only exists if is radec 
         else:
             self._state = options['init_state']
             self._timestamp = options['init_timestamp']
@@ -474,12 +477,21 @@ class OfflineEnv(BaseTelescope):
             action (int): The field ID to check and potentially mask.
         """
         # If all fields in bin are fully visited, bin is no longer valid action
-        for field_id in self.get_fields_in_bin(bin_num=action, bin2fields_in_bin=self.bin2fields_in_bin):
+        _, bin_els = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat)
+        mask_below_horizon = bin_els >= 0
+
+        fields_in_bin = self.get_fields_in_bin(bin_num=action, bin2fields_in_bin=self.bin2fields_in_bin)
+        for i, field_id in enumerate(fields_in_bin):
             max_nvisits = self.field2nvisits[field_id]
-            if self._visited.count(field_id) < max_nvisits:
-                return
-        self._action_mask[action] = False
-            
+            current_nvisits = self._visited.count(field_id)
+            assert not current_nvisits > max_nvisits, "Number of field visits should never be greater than max number of allowed visits"
+            if current_nvisits < max_nvisits:
+                break
+            else:
+                if i == len(fields_in_bin):
+                    self._mask_completed_bins[action] = False
+        self._action_mask = mask_below_horizon & self._mask_completed_bins
+
     def _update_state(self, action):
         """
         Updates the internal state variables based on the action taken.
