@@ -29,15 +29,15 @@ def plot_metrics(results_outdir):
     # val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
 
     # Plot train and val loss
-    fig, axs = plt.subplots(4, sharex=True, figsize=(5, 10))
+    fig, axs = plt.subplots(4, sharex=True, figsize=(5, 12))
 
-    axs[0].plot(train_metrics['epoch'], train_metrics['train_loss'], label='train loss', color='grey', alpha=.6)
+    axs[0].plot(train_metrics['epoch'], train_metrics['train_loss'], label='train loss', color='grey', alpha=.5, linestyle='dotted')
     axs[0].plot(val_metrics['epoch'], val_metrics['val_loss'], label='val loss')
     axs[0].hlines(y=0, xmin=0, xmax=np.max(val_metrics['epoch']), color='red', linestyle='dashed')
     axs[0].set_ylabel('Loss', fontsize=14)
     axs[0].legend()
 
-    axs[1].plot(val_train_metrics['epoch'], val_train_metrics['accuracy'], label='train accuracy', color='grey', alpha=.6)
+    axs[1].plot(val_train_metrics['epoch'], val_train_metrics['accuracy'], label='train accuracy', color='grey', alpha=.5, linestyle='dotted')
     axs[1].plot(val_metrics['epoch'], val_metrics['accuracy'], label='val accuracy')
     axs[1].hlines(y=1, xmin=0, xmax=np.max(train_metrics['epoch']), color='red', linestyle='dotted')
     axs[1].set_ylabel('Accuracy', fontsize=14)
@@ -51,11 +51,12 @@ def plot_metrics(results_outdir):
     for key in val_metrics.keys():
         if key != 'accuracy' and key != 'epoch' and 'loss' not in key:
             axs[3].plot(val_metrics['epoch'], val_metrics[key], label='val ' + key, color=f"C{i}")
-            axs[3].plot(val_metrics['epoch'], val_train_metrics[key], label='train ' + key, color=f"C{i}", linestyle='dotted', alpha=.5)
+            axs[3].plot(val_metrics['epoch'], val_train_metrics[key], color=f"C{i}", linestyle='dotted', alpha=.5)
             i += 1
     axs[3].hlines(0, xmin=0, xmax=np.max(val_metrics['epoch']), linestyle='--', color='red')
     axs[3].legend()
 
+    fig.tight_layout()
     fig.savefig(results_outdir + 'figures/' + 'loss_and_metrics_history.png')
 
 def main():

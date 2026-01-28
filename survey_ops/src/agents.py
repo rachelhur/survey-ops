@@ -190,24 +190,23 @@ class Agent:
 
                         val_loss_cur = val_metrics['val_loss'][-1]
 
-                    if use_patience:
-                        if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
-                            best_val_loss = val_loss_cur
-                            patience_cur = patience
-                            logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
-                            self.save(save_filepath)
-                            with open(train_metrics_filepath, 'wb') as handle:
-                                pickle.dump(train_metrics, handle)
-                            with open(val_metrics_filepath, 'wb') as handle:
-                                pickle.dump(val_metrics, handle)
-                            with open(val_train_metrics_filepath, 'wb') as handle:
-                                pickle.dump(val_train_metrics, handle)
-                        else:
-                            patience_cur -= 1
-                            logger.debug(f"Patience left: {patience_cur}")
-                            if patience_cur == 0:
-                                logger.info("No patience left. Ending training.")
-                                break
+                    if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
+                        best_val_loss = val_loss_cur
+                        patience_cur = patience
+                        logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
+                        self.save(save_filepath)
+                        with open(train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(train_metrics, handle)
+                        with open(val_metrics_filepath, 'wb') as handle:
+                            pickle.dump(val_metrics, handle)
+                        with open(val_train_metrics_filepath, 'wb') as handle:
+                            pickle.dump(val_train_metrics, handle)
+                    elif use_patience:
+                        patience_cur -= 1
+                        logger.debug(f"Patience left: {patience_cur}")
+                        if patience_cur == 0:
+                            logger.info("No patience left. Ending training.")
+                            break
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
