@@ -88,11 +88,14 @@ class Agent:
         train_metrics = {
             'train_loss': [],
             'train_qvals': [],
-            'lr': []
+            'lr': [],
+            'epoch': []
         }
 
         val_metrics = {metric: [] for metric in self.algorithm.val_metrics}
+        val_metrics.update({'epoch': []})
         val_train_metrics = {metric: [] for metric in self.algorithm.val_metrics}
+        val_train_metrics.update({'epoch': []})
 
         save_filepath = self.train_outdir + 'best_weights.pt'
         train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
@@ -113,6 +116,7 @@ class Agent:
 
         best_val_loss = 1e5
         patience_cur = patience
+        use_patience = patience != 0
         i_epoch = 0
 
         steps_per_epoch = len(trainloader.dataset) // batch_size
@@ -147,7 +151,8 @@ class Agent:
                     train_metrics['train_loss'].append(loss)
                     train_metrics['train_qvals'].append(q_val)
                     train_metrics['lr'].append(self.algorithm.optimizer.param_groups[0]["lr"])
-                    logger.debug(f"current LR is {train_metrics['lr'][-1]}")
+                    train_metrics['epoch'].append(i_epoch)
+                    # logger.debug(f"current LR is {train_metrics['lr'][-1]}")
 
                 # At end of each epoch, do validation check
                 with torch.no_grad():
@@ -168,8 +173,10 @@ class Agent:
 
                         for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
                             val_metrics[metric_name].append(metric_val)
+                        val_metrics['epoch'].append(i_epoch)
                         for metric_name, metric_val in zip(val_train_metrics.keys(), val_train_metric_vals):
                             val_train_metrics[metric_name].append(metric_val)
+                        val_train_metrics['epoch'].append(i_epoch)
 
                         logger.info(
                             f"Validation check at train step {i_step} \n " + \
@@ -183,26 +190,31 @@ class Agent:
 
                         val_loss_cur = val_metrics['val_loss'][-1]
 
-                    if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
-                        best_val_loss = val_loss_cur
-                        patience_cur = patience
-                        logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
-                        self.save(save_filepath)
-                        with open(train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(train_metrics, handle)
-                        with open(val_metrics_filepath, 'wb') as handle:
-                            pickle.dump(val_metrics, handle)
-                        with open(val_train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(val_train_metrics, handle)
-                    else:
-                        patience_cur -= 1
-                        logger.debug(f"Patience left: {patience_cur}")
-                        if patience_cur == 0:
-                            logger.info("No patience left. Ending training.")
-                            break
+                    if use_patience:
+                        if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
+                            best_val_loss = val_loss_cur
+                            patience_cur = patience
+                            logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
+                            self.save(save_filepath)
+                            with open(train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(train_metrics, handle)
+                            with open(val_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_metrics, handle)
+                            with open(val_train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_train_metrics, handle)
+                        else:
+                            patience_cur -= 1
+                            logger.debug(f"Patience left: {patience_cur}")
+                            if patience_cur == 0:
+                                logger.info("No patience left. Ending training.")
+                                break
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
+        with open(val_metrics_filepath, 'wb') as handle:
+            pickle.dump(val_metrics, handle)
+        with open(val_train_metrics_filepath, 'wb') as handle:
+            pickle.dump(val_train_metrics, handle)
     
     def evaluate(self, env, num_episodes, field_choice_method='interp', eval_outdir=None):
         """Evaluates the agent in an environment for multiple episodes.

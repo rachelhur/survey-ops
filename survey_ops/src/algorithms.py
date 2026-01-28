@@ -253,8 +253,6 @@ class BehaviorCloning(AlgorithmBase):
         if do_lr_scheduler_step:
         # if self.lr_scheduler is not None and step_num % self.lr_scheduler_step_freq == 0 and self.lr_scheduler and step_num >= self.lr_scheduler_start:
             self.lr_scheduler.step()
-            last_lr = self.lr_scheduler.get_last_lr()[0]
-            print(f"Stepping lr scheduler at epoch {epoch_num} with lr {last_lr}")
 
         return loss.item(), None
     

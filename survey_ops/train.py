@@ -24,35 +24,39 @@ def plot_metrics(results_outdir):
         train_metrics = pickle.load(f)
     with open(results_outdir + 'val_metrics.pkl', 'rb') as f:
         val_metrics = pickle.load(f)
-    with open(results_outdir + 'val_metrics.pkl', 'rb') as f:
+    with open(results_outdir + 'val_train_metrics.pkl', 'rb') as f:
         val_train_metrics = pickle.load(f)
-    val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
+    # val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
 
-    fig, axs = plt.subplots(2, sharex=True, figsize=(5, 5))
+    # Plot train and val loss
+    fig, axs = plt.subplots(4, sharex=True, figsize=(5, 10))
 
-    axs[0].plot(train_metrics['train_loss'], label='train loss')
-    axs[0].plot(val_steps, val_metrics['val_loss'], label='val loss')
-    axs[0].hlines(y=0, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
+    axs[0].plot(train_metrics['epoch'], train_metrics['train_loss'], label='train loss', color='grey', alpha=.6)
+    axs[0].plot(val_metrics['epoch'], val_metrics['val_loss'], label='val loss')
+    axs[0].hlines(y=0, xmin=0, xmax=np.max(val_metrics['epoch']), color='red', linestyle='dashed')
     axs[0].set_ylabel('Loss', fontsize=14)
     axs[0].legend()
 
-    axs[1].plot(val_steps, val_metrics['accuracy'], label='val accuracy')
-    axs[1].plot(val_steps, val_train_metrics['accuracy'], label='train accuracy')
-    axs[1].hlines(y=1, xmin=0, xmax=len(train_metrics['train_loss']), color='red', linestyle='--')
-    axs[1].set_xlabel('Train step', fontsize=14)
+    axs[1].plot(val_train_metrics['epoch'], val_train_metrics['accuracy'], label='train accuracy', color='grey', alpha=.6)
+    axs[1].plot(val_metrics['epoch'], val_metrics['accuracy'], label='val accuracy')
+    axs[1].hlines(y=1, xmin=0, xmax=np.max(train_metrics['epoch']), color='red', linestyle='dotted')
     axs[1].set_ylabel('Accuracy', fontsize=14)
-    axs[1].set_xlabel('Train step', fontsize=14)
+    axs[1].legend()
 
-    fig.tight_layout()
-    fig.savefig(results_outdir + 'figures/' + 'loss_and_acc_history.png')
+    axs[2].scatter(train_metrics['epoch'], train_metrics['lr'], marker='o', s=10)
+    axs[2].set_ylabel('LR', fontsize=14)
+    axs[2].set_xlabel('Epoch', fontsize=14)
 
-    fig, ax = plt.subplots()
+    i = 0
     for key in val_metrics.keys():
-        if key != 'accuracy' and 'loss' not in key:
-            ax.plot(val_steps, val_metrics[key], label=key)
-    ax.hlines(0, xmin=0, xmax=np.max(val_steps), linestyle='--', color='red')
-    ax.legend()
-    fig.savefig(results_outdir + 'figures/' + 'val_metrics_history.png')
+        if key != 'accuracy' and key != 'epoch' and 'loss' not in key:
+            axs[3].plot(val_metrics['epoch'], val_metrics[key], label='val ' + key, color=f"C{i}")
+            axs[3].plot(val_metrics['epoch'], val_train_metrics[key], label='train ' + key, color=f"C{i}", linestyle='dotted', alpha=.5)
+            i += 1
+    axs[3].hlines(0, xmin=0, xmax=np.max(val_metrics['epoch']), linestyle='--', color='red')
+    axs[3].legend()
+
+    fig.savefig(results_outdir + 'figures/' + 'loss_and_metrics_history.png')
 
 def main():
 
@@ -83,6 +87,7 @@ def main():
     parser.add_argument('--num_epochs', type=float, default=10, help='Number of passes through train dataset')
     parser.add_argument('--batch_size', type=int, default=1024, help='Training batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
+    parser.add_argument('--use_train_as_val', action='store_true', help='Instead of using validation samples during training, use the training samples')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--lr_scheduler', type=str, default=None, help='cosine_annealing or None')
     parser.add_argument('--lr_scheduler_num_epochs', type=int, default=0, help='Number of epochs to reach min lr (must be less than num_epochs)')
@@ -90,7 +95,7 @@ def main():
     parser.add_argument('--lr_scheduler_epoch_start', type=int, default=100, help='Epoch at which to start lr scheduler')
     parser.add_argument('--eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
     parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
-    parser.add_argument('--patience', type=int, default=50, help='Early stopping patience (in epochs)')
+    parser.add_argument('--patience', type=int, default=50, help='Early stopping patience (in epochs). If 0, patience will not be used.')
     
     # Algorithm setup
     parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (ddqn or behavior_cloning)')
@@ -196,7 +201,12 @@ def main():
     with open(results_outdir + 'offline_dataset_config.pkl', 'wb') as f:
         pickle.dump(OFFLINE_DATASET_CONFIG, f)
     
-    trainloader, valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=True)
+    if args.use_train_as_val:
+        trainloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=False)
+        valloader = trainloader
+    else:
+        trainloader, valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=True)
+
     # valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=np.random.randint(low=0, high=10000))
 
     # Initialize algorithm and agent
@@ -224,7 +234,7 @@ def main():
         trainloader=trainloader,
         valloader=valloader,
         batch_size=args.batch_size,
-        patience=args.patience
+        patience=args.patience,
     )
     end_time = time.time()
     logger.info(f'Total train time = {end_time - start_time}s on {device}')
@@ -233,26 +243,30 @@ def main():
     plot_metrics(results_outdir)
 
     # Plot predicted action for each state in train dataset
-    with torch.no_grad():
-        q_vals = agent.algorithm.policy_net(train_dataset.states.to(device))
-        eval_actions = torch.argmax(q_vals, dim=1).to('cpu').detach().numpy()
+    dataset = trainloader.dataset.dataset
+    val_states, val_actions, _, _, _, _ = dataset[valloader.dataset.indices]
+    train_states, train_actions, _, _, _, _ = dataset[trainloader.dataset.indices]
+    for prefix, (states, actions) in zip(['val_', 'train_'], [ (val_states, val_actions), (train_states, train_actions) ]):
+        with torch.no_grad():
+            q_vals = agent.algorithm.policy_net(states.to(device))
+            eval_actions = torch.argmax(q_vals, dim=1).to('cpu').detach().numpy()
 
-    # Sequence of actions from target (original schedule) and policy
-    target_sequence = train_dataset.actions.detach().numpy()
-    eval_sequence = eval_actions
-    first_night_indices = np.where(train_dataset.states[:, -1] == 0)
+        # Sequence of actions from target (original schedule) and policy
+        target_sequence = actions.detach().numpy()
+        eval_sequence = eval_actions
+        first_night_indices = np.where(states[:, -1] == 0)
 
-    fig, axs = plt.subplots(2, figsize=(10,5), sharex=True)
-    
-    axs[0].plot(target_sequence, marker='*', alpha=.3, label='true')
-    axs[0].plot(eval_sequence, marker='o', alpha=.3, label='pred')
-    axs[0].legend()
-    axs[0].set_ylabel('bin number')
-    axs[0].vlines(first_night_indices, ymin=0, ymax=len(train_dataset.hpGrid.lon), color='black', linestyle='--')
-    axs[1].plot(eval_sequence - target_sequence, marker='o', alpha=.5)
-    axs[1].set_ylabel('Eval sequence - target sequence \n[bin number]')
-    axs[1].set_xlabel('observation index')
-    fig.savefig(results_outdir + 'train_eval_and_target_bin_sequences.png')
+        fig, axs = plt.subplots(2, figsize=(10,5), sharex=True)
+        
+        axs[0].plot(target_sequence, marker='*', alpha=.3, label='true')
+        axs[0].plot(eval_sequence, marker='o', alpha=.3, label='pred')
+        axs[0].legend()
+        axs[0].set_ylabel('bin number')
+        axs[0].vlines(first_night_indices, ymin=0, ymax=len(dataset.hpGrid.lon), color='black', linestyle='--')
+        axs[1].plot(eval_sequence - target_sequence, marker='o', alpha=.5)
+        axs[1].set_ylabel('Eval sequence - target sequence \n[bin number]')
+        axs[1].set_xlabel('observation index')
+        fig.savefig(fig_outdir + prefix + 'eval_and_target_bin_sequences.png')
 
 if __name__ == "__main__":
     main()
