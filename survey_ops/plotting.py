@@ -1067,6 +1067,12 @@ def plot_schedule_from_file(
                 f'Missing "{alternate_prefix}_bin_id" required to compare schedules.'
             )
 
+    # read in times and filter out unphysical entries
+    times = np.asarray(schedule[primary_time_key].values, dtype=int)
+    valid = times != 0
+    schedule = schedule[valid].reset_index(drop=True)
+    times = times[valid]
+
     # load field and bin mappings
     field_id2pos = None
     if fields_file is not None:
@@ -1132,7 +1138,7 @@ def plot_schedule_from_file(
         ):
             plot_schedule_whole(
                 outfile=of,
-                times=schedule[primary_time_key].values,
+                times=times,
                 field_pos=fp,
                 bin_idxs=bi,
                 alternate_bin_idxs=abi,
@@ -1147,7 +1153,7 @@ def plot_schedule_from_file(
     elif plot_type == "field":
         plot_fields_movie(
             outfile=outfile,
-            times=schedule[primary_time_key].values,
+            times=times,
             field_pos=field_pos_1,
             schedule_label=primary_label,
         )
@@ -1157,7 +1163,7 @@ def plot_schedule_from_file(
         plot_bins_movie(
             outfile=outfile,
             nside=nside,
-            times=schedule[primary_time_key].values,
+            times=times,
             idxs=bin_ids_1.values,
             alternate_idxs=bin_ids_2.values if compare else None,
             sky_bin_mapping=bin_id2pos,
