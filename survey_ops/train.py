@@ -70,6 +70,13 @@ def main():
     parser.add_argument('--parent_results_dir', type=str, default='../experiment_results/', help='Path to save trained model')
     parser.add_argument('--exp_name', type=str, default='test_experiment', help='Name of the experiment -- used to create the output directory')
     
+    # Algorithm setup
+    parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (ddqn or behavior_cloning)')
+    parser.add_argument('--loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
+    parser.add_argument('--tau', type=float, default=0.005, help='Target network update rate for DDQN')
+    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor for DDQN')
+    parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
+
     # Data selection and setup
     parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or grid)')
     parser.add_argument('--nside', type=int, default=16, help='Healpix nside parameter (only used if binning_method is healpix)')
@@ -85,7 +92,7 @@ def main():
     parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
 
     # Training hyperparameters
-    parser.add_argument('--num_epochs', type=float, default=10, help='Number of passes through train dataset')
+    parser.add_argument('--max_epochs', type=float, default=10, help='Maximum number of passes through train dataset')
     parser.add_argument('--batch_size', type=int, default=1024, help='Training batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
     parser.add_argument('--use_train_as_val', action='store_true', help='Instead of using validation samples during training, use the training samples')
@@ -97,21 +104,13 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
     parser.add_argument('--patience', type=int, default=0, help='Early stopping patience (in epochs). If 0, patience will not be used.')
     
-    # Algorithm setup
-    parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (ddqn or behavior_cloning)')
-    parser.add_argument('--loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
-    parser.add_argument('--tau', type=float, default=0.005, help='Target network update rate for DDQN')
-    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor for DDQN')
-    parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
-
-    
     # Parse arguments
     args = parser.parse_args()
     args_dict = vars(args)
 
     # assert errors dne before running rest of code
     if args.lr_scheduler is not None:
-        assert args.num_epochs - args.lr_scheduler_epoch_start - args.lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
+        assert args.max_epochs - args.lr_scheduler_epoch_start - args.lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
 
     # Set up results directory to save outputs
     results_outdir = args.parent_results_dir + args.exp_name + '/'
@@ -236,7 +235,7 @@ def main():
     # Train agent
     start_time = time.time()
     agent.fit(
-        num_epochs=args.num_epochs,
+        num_epochs=args.max_epochs,
         trainloader=trainloader,
         valloader=valloader,
         batch_size=args.batch_size,
