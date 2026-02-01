@@ -53,7 +53,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 do_max_norm=True,
                 do_inverse_airmass=True,
                 calculate_action_mask=True,
-                objects_to_remove: list = ['guide', 'DES vvds', 'J0', 'gwh', 'DESGW', 'Alhambra-8', 'cosmos', 'COSMOS hex', 'TMO', 'LDS', 'WD0', 'DES supernova hex', 'NGC', 'ec']
+                objects_to_remove: list = ['guide', 'DES vvds', 'J0', 'gwh', 'DESGW', 'Alhambra-8', 'cosmos', 'COSMOS hex', 'TMO', 'LDS', 'WD0', 'DES supernova hex', 'NGC', 'ec'],
+                remove_large_time_diffs=True
                 ):
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
         assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
@@ -64,6 +65,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.do_max_norm = do_max_norm
         self.do_inverse_airmass = do_inverse_airmass
         self.objects_to_remove = objects_to_remove
+        self.remove_large_time_diffs = remove_large_time_diffs
 
         self.z_score_feature_names = []
         self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
@@ -127,7 +129,8 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             num_bins_1d=num_bins_1d, 
             binning_method=binning_method, 
             bin_space=bin_space,
-            timestamps=df.groupby('night').tail(-1)['timestamp'] # all but zenith timestamps
+            timestamps=df.groupby('night').tail(-1)['timestamp'], # all but zenith timestamps,
+            remove_large_time_diffs=self.remove_large_time_diffs
             )
         self.num_transitions = num_transitions
         self.np_states, self.np_next_states = states, next_states
@@ -152,7 +155,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             required_point_features = []
             required_bin_features = []
         else:
-            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start'] \
+            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'num_visits_tonight', 'time_fraction_since_start'] \
                                         if include_default_features else []
             required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon'] \
                                         if (include_default_features and include_bin_features) else []
@@ -184,19 +187,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         
         return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
         
-    def _construct_transitions(self, df, include_bin_features, num_bins_1d, binning_method, bin_space, timestamps):
-        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features)
-        actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space)
-        rewards = self._construct_rewards(df)
-        num_transitions = states.shape[0]
-        dones = np.zeros(num_transitions, dtype=bool) # False unless last observation of the night
-        dones[-1] = True
-
-        # self._done_indices = np.where(states[:, 0] == 0)[0][1:] - 1
-        # dones[self._done_indices] = True
-        action_masks = self._construct_action_masks(timestamps=timestamps, num_transitions=num_transitions)
-        return states, next_states, actions, rewards, dones, action_masks, num_transitions
-        
     def __len__(self):
         return self.states.shape[0]
 
@@ -210,7 +200,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.action_masks[idx]
         )
         return transition
-    
+            
     def _expand_feature_names_for_cyclic_norm(self, feature_names):
         # periodic vars first
         feature_names = [
@@ -345,7 +335,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Add timestamp col
         utc = pd.to_datetime(df['datetime'], utc=True)
         timestamps = (utc.astype('int64') // 10**9).values
-        df['timestamp'] = timestamps
+        df['timestamp'] = timestamps.copy()
         
         # Sort df by timestamp
         df = df.sort_values(by='timestamp')
@@ -404,8 +394,28 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df[cols] = df[cols].astype(np_bit)
 
         return df
+    
+    def _get_next_state_indices(self, df, max_time_diff_min=10):
+        time_diffs = df['timestamp'].diff().values
+        keep = time_diffs < max_time_diff_min * 60 + 90
+        next_state_idxs = np.where(keep)[0]
+        return next_state_idxs
 
-    def _construct_pointing_features(self, df):
+    def _construct_transitions(self, df, include_bin_features, num_bins_1d, binning_method, bin_space, timestamps, remove_large_time_diffs=False):
+        if remove_large_time_diffs:
+            next_state_idxs = self._get_next_state_indices(df)
+        else:
+            next_state_idxs = None
+        states, next_states = self._construct_states(df=df, include_bin_features=include_bin_features, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+        actions = self._construct_actions(df, num_bins_1d=num_bins_1d, binning_method=binning_method, bin_space=bin_space, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+        rewards = self._construct_rewards(df)
+        num_transitions = states.shape[0]
+        dones = np.zeros(num_transitions, dtype=bool) # False unless last observation of the night
+        dones[-1] = True
+        action_masks = self._construct_action_masks(timestamps=timestamps, num_transitions=num_transitions, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+        return states, next_states, actions, rewards, dones, action_masks, num_transitions
+    
+    def _construct_pointing_features(self, df, remove_large_time_diffs, next_state_idxs=None):
         """
         Constructs state and next_states for all transitions.
         Inserts a "null" observation before the first observation each night.
@@ -414,12 +424,17 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Pointing features already in DECam data
         missing_cols = set(self.pointing_feature_names) - set(df.columns) == 0
         assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be implemented in method self._process_dataframe()'
-        pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
-        next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
-
+        if remove_large_time_diffs:
+            next_state_df = df.iloc[next_state_idxs]
+            current_state_df = df.iloc[next_state_idxs - 1]
+            pointing_features = current_state_df[self.pointing_feature_names].to_numpy()
+            next_pointing_features = next_state_df[self.pointing_feature_names].to_numpy()
+        else:
+            pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+            next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
         return pointing_features, next_pointing_features
         
-    def _construct_bin_features(self, timestamps, datetimes):
+    def _construct_bin_features(self, timestamps, datetimes, remove_large_time_diffs, next_state_idxs=None):
         # These timestamps already have zenith -- they were already constructed when calculating zeniths for pointing features
         # Create empty arrays 
         hour_angles = np.empty(shape=(len(timestamps), len(self.hpGrid.idx_lookup)))
@@ -464,43 +479,68 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         missing_cols = set(self.bin_feature_names) - set(bin_df.columns) == 0
         assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. These are not yet implemented in method self._get_bin_features()'
 
-        # Get bin_features and next_bin_features
-        bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
-        next_bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
-
-        # Ensure all data are 32-bit precision before training
+       # Ensure all data are 32-bit precision before training
         for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
             cols = bin_df.select_dtypes(include=[str_bit]).columns
             bin_df[cols] = bin_df[cols].astype(np_bit)
 
+        # Get bin_features and next_bin_features
+        if remove_large_time_diffs:
+            next_state_df = bin_df.iloc[next_state_idxs]
+            current_state_df = bin_df.iloc[next_state_idxs - 1]
+            bin_features = current_state_df[self.bin_feature_names].to_numpy()
+            next_bin_features = next_state_df[self.bin_feature_names].to_numpy()
+        else:
+            bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+            next_bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
+
         self._bin_df = bin_df
         return bin_features, next_bin_features
     
-    def _construct_states(self, df, include_bin_features):
-        pointing_features, next_pointing_features = self._construct_pointing_features(df=df)
-        if include_bin_features:
-            bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'].values, datetimes=df['datetime'])
-            self.bin_features = bin_features
-            self.next_bin_features = next_bin_features
-            states = np.concatenate((pointing_features, bin_features), axis=1)
-            next_states = np.concatenate((next_pointing_features, next_bin_features), axis=1)
-            return states, next_states
-        return pointing_features, next_pointing_features
+    def _construct_states(self, df, include_bin_features, remove_large_time_diffs, next_state_idxs):
+        if remove_large_time_diffs:
+            pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
+            if include_bin_features:
+                bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'].values, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+                self.bin_features = bin_features
+                self.next_bin_features = next_bin_features
+                states = np.concatenate((pointing_features, bin_features), axis=1)
+                next_states = np.concatenate((next_pointing_features, next_bin_features), axis=1)
+                return states, next_states
+            return pointing_features, next_pointing_features
+        else:
+            pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=remove_large_time_diffs)
+            if include_bin_features:
+                bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'].values, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs)
+                self.bin_features = bin_features
+                self.next_bin_features = next_bin_features
+                states = np.concatenate((pointing_features, bin_features), axis=1)
+                next_states = np.concatenate((next_pointing_features, next_bin_features), axis=1)
+                return states, next_states
+            return pointing_features, next_pointing_features
     
-    def _construct_actions(self, df, next_states=None, bin_space='radec', binning_method='healpix', num_bins_1d=None):
+    def _construct_actions(self, df, next_states=None, bin_space='radec', binning_method='healpix', num_bins_1d=None, remove_large_time_diffs=False, next_state_idxs=None):
         assert bin_space in ['radec', 'azel'], 'bin_space must be radec or azel'
         assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
 
         if binning_method == 'healpix':
-            if self.hpGrid.is_azel:
-                lonlat_no_zen = df.groupby('night').tail(-1)[['az', 'el']].values
+            if remove_large_time_diffs:
+                if self.hpGrid.is_azel:
+                    lonlat = df.iloc[next_state_idxs][['az', 'el']].values
+                else:
+                    lonlat = df.iloc[next_state_idxs][['ra', 'dec']].values
+                indices = self.hpGrid.ang2idx(lon=lonlat[:, 0], lat=lonlat[:, 1])
             else:
-                # lon, lat = df.ra.values, df.dec.values
-                lonlat_no_zen = df.groupby('night').tail(-1)[['ra', 'dec']].values
-            indices = self.hpGrid.ang2idx(lon=lonlat_no_zen[:, 0], lat=lonlat_no_zen[:, 1])
+                if self.hpGrid.is_azel:
+                    lonlat_no_zen = df.groupby('night').tail(-1)[['az', 'el']].values
+                else:
+                    # lon, lat = df.ra.values, df.dec.values
+                    lonlat_no_zen = df.groupby('night').tail(-1)[['ra', 'dec']].values
+                indices = self.hpGrid.ang2idx(lon=lonlat_no_zen[:, 0], lat=lonlat_no_zen[:, 1])
             return indices
         
         elif binning_method == 'uniform_grid' and bin_space == 'azel':
+            raise NotImplementedError
             az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
             # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
             el_edges = np.linspace(0, 90, num_bins_1d + 1, dtype=np.float32)
@@ -523,11 +563,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.id2radec = dict(sorted(id2radec.items()))
 
             return bin_ids
-        
         else:
             raise NotImplementedError
 
-    def _construct_rewards(self, df):
+    def _construct_rewards(self, df, remove_large_time_diffs=False, next_state_idxs=None):
         """Constructs rewards for all transitions. Reward is defined as teff, normalized to [0, 1]."""
         teff_no_zen = df[df['object'] != 'zenith'][['teff']].values[:, 0]
         t_diff = df.sort_values(['night', 'timestamp']).groupby('night')['timestamp'].diff().dropna().to_numpy()
@@ -537,7 +576,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         rewards = (teff_inst_rate - min_rate)/max_rate
         return rewards
 
-    def _construct_action_masks(self, timestamps, num_transitions):
+    def _construct_action_masks(self, timestamps, num_transitions, remove_large_time_diffs=False, next_state_idxs=None):
         """
         Constructs action masks only with the condition that bins outside of horizon are masked
         """

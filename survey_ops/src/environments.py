@@ -418,9 +418,10 @@ class OfflineEnv(BaseTelescope):
             self._night_idx = -1
             self._is_new_night = True
             self._start_new_night()
-            self._mask_completed_bins = np.zeros(self.nbins, dtype=bool) # Only exists if is radec
-            bins_with_fields = [int(item) for item in list(self.bin2fields_in_bin.keys())]
-            self._mask_completed_bins[bins_with_fields] = True
+            if self.bin_space == 'radec':
+                self._mask_completed_bins = np.zeros(self.nbins, dtype=bool) # Only exists if is radec
+                bins_with_fields = [int(item) for item in list(self.bin2fields_in_bin.keys())]
+                self._mask_completed_bins[bins_with_fields] = True
             self._update_action_mask(action=None, time=self._timestamp)
 
         else:

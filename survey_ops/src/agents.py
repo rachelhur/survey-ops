@@ -189,6 +189,7 @@ class Agent:
 
                         if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
                             best_val_loss = val_loss_cur
+                            best_epoch = i_epoch
                             patience_cur = patience
                             logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
                             self.save(save_filepath)
@@ -204,7 +205,8 @@ class Agent:
                             if patience_cur == 0:
                                 logger.info("No patience left. Ending training.")
                                 break
-
+        
+        logger.info(f"Best val loss was {best_val_loss:.3f} at epoch {best_epoch}")
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
         with open(val_metrics_filepath, 'wb') as handle:

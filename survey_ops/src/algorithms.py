@@ -244,7 +244,7 @@ class BehaviorCloning(AlgorithmBase):
 
         self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy','accuracy']
         
-    def train_step(self, batch, epoch_num, step_num):
+    def train_step(self, batch, epoch_num, step_num=None):
         """
         Train the policy to mimic expert actions from offline data
         """
@@ -273,6 +273,7 @@ class BehaviorCloning(AlgorithmBase):
                                 and epoch_num <= self.lr_scheduler_num_epochs + self.lr_scheduler_epoch_start
         )
         if do_lr_scheduler_step:
+            logger.debug(f'---------------- Doing lr scheduler step at epoch {epoch_num} ----------------')
             self.lr_scheduler.step()
 
         return loss.item(), None

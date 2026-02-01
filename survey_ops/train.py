@@ -90,6 +90,7 @@ def main():
     parser.add_argument('--do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
     parser.add_argument('--do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
     parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
+    parser.add_argument('--remove_large_time_diffs', action='store_true', help='New method of calculating transitions which removes any transitions with time difference greater than 10 min')
 
     # Training hyperparameters
     parser.add_argument('--max_epochs', type=float, default=10, help='Maximum number of passes through train dataset')
@@ -156,7 +157,8 @@ def main():
         'do_cyclical_norm': args.do_cyclical_norm,
         'do_max_norm': args.do_max_norm,
         'do_inverse_airmass': args.do_inverse_airmass,
-        'calculate_action_mask': 'dqn' in args.algorithm_name
+        'calculate_action_mask': 'dqn' in args.algorithm_name,
+        'remove_large_time_diffs': args.remove_large_time_diffs
     }
     
     logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')

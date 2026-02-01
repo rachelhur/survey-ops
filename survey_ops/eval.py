@@ -64,33 +64,34 @@ def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, ma
     # schedule = pd.read_csv(output_filepath)
 
     # Create fields movies
-    logger.info("Creating field movies")
-    plot_schedule_from_file(
-        outfile=save_dir + 'expert_field_schedule.gif',
-        schedule_file=output_filepath,
-        plot_type='field',
-        nside=nside,
-        fields_file=field2radec_filepath,
-        bins_file=bin2pos_filepath,
-        whole=False,
-        compare=False,
-        expert=True,
-        is_azel=bin_space=='azel',
-        mollweide=False,
-    )
-    plot_schedule_from_file(
-        outfile=save_dir + 'agent_field_schedule.gif',
-        schedule_file=output_filepath,
-        plot_type='field',
-        nside=nside,
-        fields_file=field2radec_filepath,
-        bins_file=bin2pos_filepath,
-        whole=False,
-        compare=False,
-        expert=False,
-        is_azel=bin_space=='azel',
-        mollweide=False,
-    )
+    if bin_space == 'radec':
+        logger.info("Creating field movies")
+        plot_schedule_from_file(
+            outfile=save_dir + 'expert_field_schedule.gif',
+            schedule_file=output_filepath,
+            plot_type='field',
+            nside=nside,
+            fields_file=field2radec_filepath,
+            bins_file=bin2pos_filepath,
+            whole=False,
+            compare=False,
+            expert=True,
+            is_azel=bin_space=='azel',
+            mollweide=False,
+        )
+        plot_schedule_from_file(
+            outfile=save_dir + 'agent_field_schedule.gif',
+            schedule_file=output_filepath,
+            plot_type='field',
+            nside=nside,
+            fields_file=field2radec_filepath,
+            bins_file=bin2pos_filepath,
+            whole=False,
+            compare=False,
+            expert=False,
+            is_azel=bin_space=='azel',
+            mollweide=False,
+        )
 
     # Create bin movies   
     logger.info("Creating bin movies")
@@ -163,55 +164,35 @@ def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, ma
         mollweide=False,
     )
 
-    logger.info("Creating static plots")
-    # Mollefield
-    plot_schedule_from_file(
-        outfile=save_dir + 'mollweide.png',
-        schedule_file=output_filepath,
-        plot_type='bin',
-        nside=nside,
-        fields_file=field2radec_filepath,
-        bins_file=bin2pos_filepath,
-        whole=True,
-        compare=True,
-        expert=True,
-        is_azel=bin_space=='azel',
-        mollweide=True,
-    )  
-    plot_schedule_from_file(
-        outfile=save_dir + 'ortho.png',
-        schedule_file=output_filepath,
-        plot_type='bin',
-        nside=nside,
-        fields_file=field2radec_filepath,
-        bins_file=bin2pos_filepath,
-        whole=True,
-        compare=True,
-        expert=True,
-        is_azel=bin_space=='azel',
-        mollweide=False,
-    )  
-
-def create_gif(outfile, plot_type, times, nside=None, idxs=None, alt_idxs=None, bin2pos=None, whole=False, field2radec=None, field_idxs=None):
-    if whole:
-        raise NotImplementedError
-    if plot_type=='bin':
-        plot_bins_movie(
-            outfile=outfile,
+    if bin_space == 'radec':
+        # Mollefield
+        logger.info("Creating static plots")
+        plot_schedule_from_file(
+            outfile=save_dir + 'mollweide.png',
+            schedule_file=output_filepath,
+            plot_type='bin',
             nside=nside,
-            times=times,
-            idxs=idxs,
-            alternate_idxs=alt_idxs,
-            sky_bin_mapping=bin2pos,
-
-        )
-    elif plot_type=='field':
-        field_pos = np.array([field2radec.get(str(fid), [None, None]) for fid in idxs])
-        plot_fields_movie(
-            outfile=outfile,
-            times=times,
-            field_pos=field_pos
-        )
+            fields_file=field2radec_filepath,
+            bins_file=bin2pos_filepath,
+            whole=True,
+            compare=True,
+            expert=True,
+            is_azel=bin_space=='azel',
+            mollweide=True,
+        )  
+        plot_schedule_from_file(
+            outfile=save_dir + 'ortho.png',
+            schedule_file=output_filepath,
+            plot_type='bin',
+            nside=nside,
+            fields_file=field2radec_filepath,
+            bins_file=bin2pos_filepath,
+            whole=True,
+            compare=True,
+            expert=True,
+            is_azel=bin_space=='azel',
+            mollweide=False,
+        )  
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
