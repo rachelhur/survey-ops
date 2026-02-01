@@ -155,7 +155,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             required_point_features = []
             required_bin_features = []
         else:
-            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'num_visits_tonight', 'time_fraction_since_start'] \
+            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start'] \
                                         if include_default_features else []
             required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon'] \
                                         if (include_default_features and include_bin_features) else []
