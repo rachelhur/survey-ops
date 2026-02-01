@@ -1,0 +1,37 @@
+2026-02-01 10:24:39 - INFO - Saving results in ../experiment_results/bc-radec-test/
+2026-02-01 10:24:39 - INFO - Experiment parameters:
+2026-02-01 10:24:39 - INFO - seed: 10
+2026-02-01 10:24:39 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-02-01 10:24:39 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-02-01 10:24:39 - INFO - parent_results_dir: ../experiment_results/
+2026-02-01 10:24:39 - INFO - exp_name: bc-radec-test
+2026-02-01 10:24:39 - INFO - algorithm_name: behavior_cloning
+2026-02-01 10:24:39 - INFO - loss_function: cross_entropy
+2026-02-01 10:24:39 - INFO - tau: 0.005
+2026-02-01 10:24:39 - INFO - gamma: 0.99
+2026-02-01 10:24:39 - INFO - activation: relu
+2026-02-01 10:24:39 - INFO - binning_method: healpix
+2026-02-01 10:24:39 - INFO - nside: 16
+2026-02-01 10:24:39 - INFO - bin_space: radec
+2026-02-01 10:24:39 - INFO - specific_years: [2018]
+2026-02-01 10:24:39 - INFO - specific_months: [1]
+2026-02-01 10:24:39 - INFO - specific_days: None
+2026-02-01 10:24:39 - INFO - include_bin_features: False
+2026-02-01 10:24:39 - INFO - do_cyclical_norm: True
+2026-02-01 10:24:39 - INFO - do_max_norm: True
+2026-02-01 10:24:39 - INFO - do_inverse_airmass: True
+2026-02-01 10:24:39 - INFO - max_epochs: 800.0
+2026-02-01 10:24:39 - INFO - batch_size: 1024
+2026-02-01 10:24:39 - INFO - num_workers: 4
+2026-02-01 10:24:39 - INFO - use_train_as_val: False
+2026-02-01 10:24:39 - INFO - lr: 0.008
+2026-02-01 10:24:39 - INFO - lr_scheduler: cosine_annealing
+2026-02-01 10:24:39 - INFO - lr_scheduler_num_epochs: 50
+2026-02-01 10:24:39 - INFO - lr_scheduler_epoch_start: 100
+2026-02-01 10:24:39 - INFO - eta_min: 0.0001
+2026-02-01 10:24:39 - INFO - hidden_dim: 512
+2026-02-01 10:24:39 - INFO - patience: 50
+2026-02-01 10:24:39 - INFO - Loading raw data...
+2026-02-01 10:24:39 - INFO - Loaded data from json
+2026-02-01 10:24:39 - DEBUG - Offline dataset config: {'binning_method': 'healpix', 'nside': 16, 'bin_space': 'radec', 'include_default_features': True, 'include_bin_features': False, 'do_cyclical_norm': True, 'do_max_norm': True, 'do_inverse_airmass': True, 'calculate_action_mask': False}
+2026-02-01 10:24:39 - INFO - Processing raw data into OfflineDataset()...

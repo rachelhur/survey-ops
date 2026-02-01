@@ -1,0 +1,499 @@
+2026-02-01 12:58:18 - INFO - Saving results in ../experiment_results/bc-azel-new-method-test/
+2026-02-01 12:58:18 - INFO - Experiment parameters:
+2026-02-01 12:58:18 - INFO - seed: 10
+2026-02-01 12:58:18 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-02-01 12:58:18 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-02-01 12:58:18 - INFO - parent_results_dir: ../experiment_results/
+2026-02-01 12:58:18 - INFO - exp_name: bc-azel-new-method-test
+2026-02-01 12:58:18 - INFO - algorithm_name: behavior_cloning
+2026-02-01 12:58:18 - INFO - loss_function: cross_entropy
+2026-02-01 12:58:18 - INFO - tau: 0.005
+2026-02-01 12:58:18 - INFO - gamma: 0.99
+2026-02-01 12:58:18 - INFO - activation: relu
+2026-02-01 12:58:18 - INFO - binning_method: healpix
+2026-02-01 12:58:18 - INFO - nside: 16
+2026-02-01 12:58:18 - INFO - bin_space: azel
+2026-02-01 12:58:18 - INFO - specific_years: [2018]
+2026-02-01 12:58:18 - INFO - specific_months: [1]
+2026-02-01 12:58:18 - INFO - specific_days: None
+2026-02-01 12:58:18 - INFO - include_bin_features: False
+2026-02-01 12:58:18 - INFO - do_cyclical_norm: True
+2026-02-01 12:58:18 - INFO - do_max_norm: True
+2026-02-01 12:58:18 - INFO - do_inverse_airmass: True
+2026-02-01 12:58:18 - INFO - use_new_method: True
+2026-02-01 12:58:18 - INFO - max_epochs: 800.0
+2026-02-01 12:58:18 - INFO - batch_size: 1024
+2026-02-01 12:58:18 - INFO - num_workers: 4
+2026-02-01 12:58:18 - INFO - use_train_as_val: False
+2026-02-01 12:58:18 - INFO - lr: 0.008
+2026-02-01 12:58:18 - INFO - lr_scheduler: None
+2026-02-01 12:58:18 - INFO - lr_scheduler_num_epochs: 0
+2026-02-01 12:58:18 - INFO - lr_scheduler_epoch_start: 100
+2026-02-01 12:58:18 - INFO - eta_min: 1e-05
+2026-02-01 12:58:18 - INFO - hidden_dim: 512
+2026-02-01 12:58:18 - INFO - patience: 50
+2026-02-01 12:58:18 - INFO - Loading raw data...
+2026-02-01 12:58:19 - INFO - Loaded data from json
+2026-02-01 12:58:19 - DEBUG - Offline dataset config: {'binning_method': 'healpix', 'nside': 16, 'bin_space': 'azel', 'include_default_features': True, 'include_bin_features': False, 'do_cyclical_norm': True, 'do_max_norm': True, 'do_inverse_airmass': True, 'calculate_action_mask': False, 'new_method': True}
+2026-02-01 12:58:19 - INFO - Processing raw data into OfflineDataset()...
+2026-02-01 12:58:20 - INFO - Performing inverse airmass normalization
+2026-02-01 12:58:20 - INFO - Performing max normalziation
+2026-02-01 12:58:20 - DEBUG - (First need to get mask to mask out all state features which do not use this normalization)
+2026-02-01 12:58:20 - DEBUG - (Then divide by max val for each feature)
+2026-02-01 12:58:20 - INFO - Finished constructing train_dataset
+2026-02-01 12:58:21 - INFO - Plotting S x A (state x action) space cornerplot (this will take some time...)
+2026-02-01 12:58:30 - INFO - Corner plot saved
+2026-02-01 12:58:31 - INFO - Initializing agent...
+2026-02-01 12:58:31 - DEBUG - 1600 // 1024
+2026-02-01 12:58:31 - DEBUG - lr_scheduler_num_epochs 0 * 1
+2026-02-01 12:58:31 - DEBUG - lr_scheduler_kwargs {}
+2026-02-01 12:58:31 - INFO - Starting training...
+2026-02-01 12:58:32 - INFO - Total number of training steps: 800
+2026-02-01 12:58:32 - INFO - Steps per epoch: 1
+2026-02-01 12:58:32 - DEBUG - Total number of lr scheduler steps: None
+2026-02-01 12:58:32 - DEBUG - Number of transitions in dataset: 1600
+2026-02-01 12:58:32 - INFO - Validation check at train step 0 
+ val_loss = 5.736 |  logp_expert_action = -5.736 |  action_margin = -0.898 |  entropy = 7.046 |  accuracy = 0.051 | 
+val_loss (train batch) = 5.654 |  logp_expert_action (train batch) = -5.654 |  action_margin (train batch) = -0.801 |  entropy (train batch) = 7.049 |  accuracy (train batch) = 0.072 | 
+2026-02-01 12:58:32 - INFO - Improved model at step 0. New best val loss is 5.736 Saving weights.
+2026-02-01 12:58:32 - INFO - Validation check at train step 1 
+ val_loss = 4.704 |  logp_expert_action = -4.704 |  action_margin = -2.499 |  entropy = 4.005 |  accuracy = 0.045 | 
+val_loss (train batch) = 4.488 |  logp_expert_action (train batch) = -4.488 |  action_margin (train batch) = -2.284 |  entropy (train batch) = 4.008 |  accuracy (train batch) = 0.057 | 
+2026-02-01 12:58:32 - INFO - Improved model at step 1. New best val loss is 4.704 Saving weights.
+2026-02-01 12:58:32 - INFO - Validation check at train step 2 
+ val_loss = 5.250 |  logp_expert_action = -5.250 |  action_margin = -3.746 |  entropy = 3.273 |  accuracy = 0.045 | 
+val_loss (train batch) = 4.808 |  logp_expert_action (train batch) = -4.808 |  action_margin (train batch) = -3.263 |  entropy (train batch) = 3.279 |  accuracy (train batch) = 0.065 | 
+2026-02-01 12:58:32 - DEBUG - Patience left: 49
+2026-02-01 12:58:32 - INFO - Validation check at train step 3 
+ val_loss = 5.199 |  logp_expert_action = -5.199 |  action_margin = -3.194 |  entropy = 3.555 |  accuracy = 0.039 | 
+val_loss (train batch) = 4.928 |  logp_expert_action (train batch) = -4.928 |  action_margin (train batch) = -2.915 |  entropy (train batch) = 3.566 |  accuracy (train batch) = 0.052 | 
+2026-02-01 12:58:32 - DEBUG - Patience left: 48
+2026-02-01 12:58:32 - INFO - Validation check at train step 4 
+ val_loss = 4.912 |  logp_expert_action = -4.912 |  action_margin = -2.326 |  entropy = 4.099 |  accuracy = 0.039 | 
+val_loss (train batch) = 4.557 |  logp_expert_action (train batch) = -4.557 |  action_margin (train batch) = -1.969 |  entropy (train batch) = 4.098 |  accuracy (train batch) = 0.073 | 
+2026-02-01 12:58:32 - DEBUG - Patience left: 47
+2026-02-01 12:58:32 - INFO - Validation check at train step 5 
+ val_loss = 4.835 |  logp_expert_action = -4.835 |  action_margin = -2.537 |  entropy = 4.059 |  accuracy = 0.045 | 
+val_loss (train batch) = 4.396 |  logp_expert_action (train batch) = -4.396 |  action_margin (train batch) = -2.125 |  entropy (train batch) = 4.035 |  accuracy (train batch) = 0.067 | 
+2026-02-01 12:58:32 - DEBUG - Patience left: 46
+2026-02-01 12:58:32 - INFO - Validation check at train step 6 
+ val_loss = 4.714 |  logp_expert_action = -4.714 |  action_margin = -2.156 |  entropy = 4.195 |  accuracy = 0.045 | 
+val_loss (train batch) = 4.381 |  logp_expert_action (train batch) = -4.381 |  action_margin (train batch) = -1.856 |  entropy (train batch) = 4.180 |  accuracy (train batch) = 0.082 | 
+2026-02-01 12:58:32 - DEBUG - Patience left: 45
+2026-02-01 12:58:32 - INFO - Validation check at train step 7 
+ val_loss = 4.574 |  logp_expert_action = -4.574 |  action_margin = -1.696 |  entropy = 4.340 |  accuracy = 0.051 | 
+val_loss (train batch) = 4.264 |  logp_expert_action (train batch) = -4.264 |  action_margin (train batch) = -1.398 |  entropy (train batch) = 4.333 |  accuracy (train batch) = 0.091 | 
+2026-02-01 12:58:32 - INFO - Improved model at step 7. New best val loss is 4.574 Saving weights.
+2026-02-01 12:58:32 - INFO - Validation check at train step 8 
+ val_loss = 4.440 |  logp_expert_action = -4.440 |  action_margin = -1.389 |  entropy = 4.487 |  accuracy = 0.084 | 
+val_loss (train batch) = 4.227 |  logp_expert_action (train batch) = -4.227 |  action_margin (train batch) = -1.182 |  entropy (train batch) = 4.478 |  accuracy (train batch) = 0.144 | 
+2026-02-01 12:58:32 - INFO - Improved model at step 8. New best val loss is 4.440 Saving weights.
+2026-02-01 12:58:32 - INFO - Validation check at train step 9 
+ val_loss = 4.333 |  logp_expert_action = -4.333 |  action_margin = -1.299 |  entropy = 4.654 |  accuracy = 0.079 | 
+val_loss (train batch) = 4.168 |  logp_expert_action (train batch) = -4.168 |  action_margin (train batch) = -1.138 |  entropy (train batch) = 4.651 |  accuracy (train batch) = 0.115 | 
+2026-02-01 12:58:32 - INFO - Improved model at step 9. New best val loss is 4.333 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 10 
+ val_loss = 4.224 |  logp_expert_action = -4.224 |  action_margin = -1.361 |  entropy = 4.600 |  accuracy = 0.090 | 
+val_loss (train batch) = 4.008 |  logp_expert_action (train batch) = -4.008 |  action_margin (train batch) = -1.168 |  entropy (train batch) = 4.587 |  accuracy (train batch) = 0.104 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 10. New best val loss is 4.224 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 11 
+ val_loss = 4.100 |  logp_expert_action = -4.100 |  action_margin = -1.534 |  entropy = 4.259 |  accuracy = 0.073 | 
+val_loss (train batch) = 3.871 |  logp_expert_action (train batch) = -3.871 |  action_margin (train batch) = -1.312 |  entropy (train batch) = 4.255 |  accuracy (train batch) = 0.116 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 11. New best val loss is 4.100 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 12 
+ val_loss = 4.031 |  logp_expert_action = -4.031 |  action_margin = -1.812 |  entropy = 3.830 |  accuracy = 0.079 | 
+val_loss (train batch) = 3.748 |  logp_expert_action (train batch) = -3.748 |  action_margin (train batch) = -1.567 |  entropy (train batch) = 3.799 |  accuracy (train batch) = 0.130 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 12. New best val loss is 4.031 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 13 
+ val_loss = 4.020 |  logp_expert_action = -4.020 |  action_margin = -2.146 |  entropy = 3.457 |  accuracy = 0.084 | 
+val_loss (train batch) = 3.530 |  logp_expert_action (train batch) = -3.530 |  action_margin (train batch) = -1.669 |  entropy (train batch) = 3.407 |  accuracy (train batch) = 0.164 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 13. New best val loss is 4.020 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 14 
+ val_loss = 3.978 |  logp_expert_action = -3.978 |  action_margin = -2.186 |  entropy = 3.341 |  accuracy = 0.090 | 
+val_loss (train batch) = 3.601 |  logp_expert_action (train batch) = -3.601 |  action_margin (train batch) = -1.761 |  entropy (train batch) = 3.348 |  accuracy (train batch) = 0.155 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 14. New best val loss is 3.978 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 15 
+ val_loss = 3.890 |  logp_expert_action = -3.890 |  action_margin = -1.936 |  entropy = 3.434 |  accuracy = 0.112 | 
+val_loss (train batch) = 3.473 |  logp_expert_action (train batch) = -3.473 |  action_margin (train batch) = -1.507 |  entropy (train batch) = 3.403 |  accuracy (train batch) = 0.167 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 15. New best val loss is 3.890 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 16 
+ val_loss = 3.801 |  logp_expert_action = -3.801 |  action_margin = -1.627 |  entropy = 3.587 |  accuracy = 0.101 | 
+val_loss (train batch) = 3.448 |  logp_expert_action (train batch) = -3.448 |  action_margin (train batch) = -1.250 |  entropy (train batch) = 3.600 |  accuracy (train batch) = 0.132 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 16. New best val loss is 3.801 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 17 
+ val_loss = 3.746 |  logp_expert_action = -3.746 |  action_margin = -1.475 |  entropy = 3.638 |  accuracy = 0.157 | 
+val_loss (train batch) = 3.291 |  logp_expert_action (train batch) = -3.291 |  action_margin (train batch) = -0.988 |  entropy (train batch) = 3.644 |  accuracy (train batch) = 0.201 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 17. New best val loss is 3.746 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 18 
+ val_loss = 3.694 |  logp_expert_action = -3.694 |  action_margin = -1.461 |  entropy = 3.598 |  accuracy = 0.129 | 
+val_loss (train batch) = 3.339 |  logp_expert_action (train batch) = -3.339 |  action_margin (train batch) = -1.082 |  entropy (train batch) = 3.610 |  accuracy (train batch) = 0.181 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 18. New best val loss is 3.694 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 19 
+ val_loss = 3.647 |  logp_expert_action = -3.647 |  action_margin = -1.490 |  entropy = 3.513 |  accuracy = 0.135 | 
+val_loss (train batch) = 3.230 |  logp_expert_action (train batch) = -3.230 |  action_margin (train batch) = -1.069 |  entropy (train batch) = 3.510 |  accuracy (train batch) = 0.175 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 19. New best val loss is 3.647 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 20 
+ val_loss = 3.605 |  logp_expert_action = -3.605 |  action_margin = -1.573 |  entropy = 3.377 |  accuracy = 0.180 | 
+val_loss (train batch) = 3.139 |  logp_expert_action (train batch) = -3.139 |  action_margin (train batch) = -1.086 |  entropy (train batch) = 3.371 |  accuracy (train batch) = 0.220 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 20. New best val loss is 3.605 Saving weights.
+2026-02-01 12:58:33 - INFO - Validation check at train step 21 
+ val_loss = 3.542 |  logp_expert_action = -3.542 |  action_margin = -1.574 |  entropy = 3.288 |  accuracy = 0.169 | 
+val_loss (train batch) = 3.083 |  logp_expert_action (train batch) = -3.083 |  action_margin (train batch) = -1.110 |  entropy (train batch) = 3.282 |  accuracy (train batch) = 0.218 | 
+2026-02-01 12:58:33 - INFO - Improved model at step 21. New best val loss is 3.542 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 22 
+ val_loss = 3.499 |  logp_expert_action = -3.499 |  action_margin = -1.571 |  entropy = 3.221 |  accuracy = 0.191 | 
+val_loss (train batch) = 3.006 |  logp_expert_action (train batch) = -3.006 |  action_margin (train batch) = -1.088 |  entropy (train batch) = 3.204 |  accuracy (train batch) = 0.217 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 22. New best val loss is 3.499 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 23 
+ val_loss = 3.468 |  logp_expert_action = -3.468 |  action_margin = -1.571 |  entropy = 3.171 |  accuracy = 0.230 | 
+val_loss (train batch) = 2.991 |  logp_expert_action (train batch) = -2.991 |  action_margin (train batch) = -1.114 |  entropy (train batch) = 3.139 |  accuracy (train batch) = 0.224 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 23. New best val loss is 3.468 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 24 
+ val_loss = 3.426 |  logp_expert_action = -3.426 |  action_margin = -1.556 |  entropy = 3.120 |  accuracy = 0.236 | 
+val_loss (train batch) = 2.936 |  logp_expert_action (train batch) = -2.936 |  action_margin (train batch) = -1.079 |  entropy (train batch) = 3.091 |  accuracy (train batch) = 0.232 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 24. New best val loss is 3.426 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 25 
+ val_loss = 3.400 |  logp_expert_action = -3.400 |  action_margin = -1.573 |  entropy = 3.031 |  accuracy = 0.213 | 
+val_loss (train batch) = 2.819 |  logp_expert_action (train batch) = -2.819 |  action_margin (train batch) = -0.990 |  entropy (train batch) = 3.011 |  accuracy (train batch) = 0.264 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 25. New best val loss is 3.400 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 26 
+ val_loss = 3.384 |  logp_expert_action = -3.384 |  action_margin = -1.571 |  entropy = 3.051 |  accuracy = 0.157 | 
+val_loss (train batch) = 2.819 |  logp_expert_action (train batch) = -2.819 |  action_margin (train batch) = -0.981 |  entropy (train batch) = 3.026 |  accuracy (train batch) = 0.259 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 26. New best val loss is 3.384 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 27 
+ val_loss = 3.370 |  logp_expert_action = -3.370 |  action_margin = -1.543 |  entropy = 3.060 |  accuracy = 0.180 | 
+val_loss (train batch) = 2.866 |  logp_expert_action (train batch) = -2.866 |  action_margin (train batch) = -0.982 |  entropy (train batch) = 3.044 |  accuracy (train batch) = 0.248 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 27. New best val loss is 3.370 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 28 
+ val_loss = 3.365 |  logp_expert_action = -3.365 |  action_margin = -1.548 |  entropy = 3.003 |  accuracy = 0.146 | 
+val_loss (train batch) = 2.739 |  logp_expert_action (train batch) = -2.739 |  action_margin (train batch) = -0.902 |  entropy (train batch) = 2.962 |  accuracy (train batch) = 0.294 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 28. New best val loss is 3.365 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 29 
+ val_loss = 3.361 |  logp_expert_action = -3.361 |  action_margin = -1.639 |  entropy = 2.903 |  accuracy = 0.129 | 
+val_loss (train batch) = 2.643 |  logp_expert_action (train batch) = -2.643 |  action_margin (train batch) = -0.879 |  entropy (train batch) = 2.842 |  accuracy (train batch) = 0.312 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 29. New best val loss is 3.361 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 30 
+ val_loss = 3.347 |  logp_expert_action = -3.347 |  action_margin = -1.684 |  entropy = 2.811 |  accuracy = 0.163 | 
+val_loss (train batch) = 2.676 |  logp_expert_action (train batch) = -2.676 |  action_margin (train batch) = -0.959 |  entropy (train batch) = 2.786 |  accuracy (train batch) = 0.278 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 30. New best val loss is 3.347 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 31 
+ val_loss = 3.322 |  logp_expert_action = -3.322 |  action_margin = -1.716 |  entropy = 2.735 |  accuracy = 0.180 | 
+val_loss (train batch) = 2.665 |  logp_expert_action (train batch) = -2.665 |  action_margin (train batch) = -0.984 |  entropy (train batch) = 2.715 |  accuracy (train batch) = 0.285 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 31. New best val loss is 3.322 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 32 
+ val_loss = 3.322 |  logp_expert_action = -3.322 |  action_margin = -1.728 |  entropy = 2.694 |  accuracy = 0.219 | 
+val_loss (train batch) = 2.571 |  logp_expert_action (train batch) = -2.571 |  action_margin (train batch) = -0.902 |  entropy (train batch) = 2.644 |  accuracy (train batch) = 0.315 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 32. New best val loss is 3.322 Saving weights.
+2026-02-01 12:58:34 - INFO - Validation check at train step 33 
+ val_loss = 3.306 |  logp_expert_action = -3.306 |  action_margin = -1.733 |  entropy = 2.629 |  accuracy = 0.225 | 
+val_loss (train batch) = 2.540 |  logp_expert_action (train batch) = -2.540 |  action_margin (train batch) = -0.914 |  entropy (train batch) = 2.568 |  accuracy (train batch) = 0.298 | 
+2026-02-01 12:58:34 - INFO - Improved model at step 33. New best val loss is 3.306 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 34 
+ val_loss = 3.310 |  logp_expert_action = -3.310 |  action_margin = -1.712 |  entropy = 2.666 |  accuracy = 0.208 | 
+val_loss (train batch) = 2.571 |  logp_expert_action (train batch) = -2.571 |  action_margin (train batch) = -0.889 |  entropy (train batch) = 2.667 |  accuracy (train batch) = 0.300 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 49
+2026-02-01 12:58:35 - INFO - Validation check at train step 35 
+ val_loss = 3.287 |  logp_expert_action = -3.287 |  action_margin = -1.656 |  entropy = 2.723 |  accuracy = 0.197 | 
+val_loss (train batch) = 2.582 |  logp_expert_action (train batch) = -2.582 |  action_margin (train batch) = -0.899 |  entropy (train batch) = 2.679 |  accuracy (train batch) = 0.307 | 
+2026-02-01 12:58:35 - INFO - Improved model at step 35. New best val loss is 3.287 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 36 
+ val_loss = 3.287 |  logp_expert_action = -3.287 |  action_margin = -1.619 |  entropy = 2.744 |  accuracy = 0.174 | 
+val_loss (train batch) = 2.493 |  logp_expert_action (train batch) = -2.493 |  action_margin (train batch) = -0.749 |  entropy (train batch) = 2.706 |  accuracy (train batch) = 0.325 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 49
+2026-02-01 12:58:35 - INFO - Validation check at train step 37 
+ val_loss = 3.287 |  logp_expert_action = -3.287 |  action_margin = -1.629 |  entropy = 2.754 |  accuracy = 0.180 | 
+val_loss (train batch) = 2.520 |  logp_expert_action (train batch) = -2.520 |  action_margin (train batch) = -0.834 |  entropy (train batch) = 2.714 |  accuracy (train batch) = 0.312 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 48
+2026-02-01 12:58:35 - INFO - Validation check at train step 38 
+ val_loss = 3.280 |  logp_expert_action = -3.280 |  action_margin = -1.656 |  entropy = 2.717 |  accuracy = 0.208 | 
+val_loss (train batch) = 2.524 |  logp_expert_action (train batch) = -2.524 |  action_margin (train batch) = -0.875 |  entropy (train batch) = 2.647 |  accuracy (train batch) = 0.304 | 
+2026-02-01 12:58:35 - INFO - Improved model at step 38. New best val loss is 3.280 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 39 
+ val_loss = 3.260 |  logp_expert_action = -3.260 |  action_margin = -1.699 |  entropy = 2.596 |  accuracy = 0.225 | 
+val_loss (train batch) = 2.430 |  logp_expert_action (train batch) = -2.430 |  action_margin (train batch) = -0.800 |  entropy (train batch) = 2.555 |  accuracy (train batch) = 0.329 | 
+2026-02-01 12:58:35 - INFO - Improved model at step 39. New best val loss is 3.260 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 40 
+ val_loss = 3.265 |  logp_expert_action = -3.265 |  action_margin = -1.736 |  entropy = 2.534 |  accuracy = 0.219 | 
+val_loss (train batch) = 2.378 |  logp_expert_action (train batch) = -2.378 |  action_margin (train batch) = -0.767 |  entropy (train batch) = 2.501 |  accuracy (train batch) = 0.350 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 49
+2026-02-01 12:58:35 - INFO - Validation check at train step 41 
+ val_loss = 3.275 |  logp_expert_action = -3.275 |  action_margin = -1.733 |  entropy = 2.545 |  accuracy = 0.213 | 
+val_loss (train batch) = 2.411 |  logp_expert_action (train batch) = -2.411 |  action_margin (train batch) = -0.767 |  entropy (train batch) = 2.543 |  accuracy (train batch) = 0.329 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 48
+2026-02-01 12:58:35 - INFO - Validation check at train step 42 
+ val_loss = 3.238 |  logp_expert_action = -3.238 |  action_margin = -1.644 |  entropy = 2.578 |  accuracy = 0.264 | 
+val_loss (train batch) = 2.441 |  logp_expert_action (train batch) = -2.441 |  action_margin (train batch) = -0.755 |  entropy (train batch) = 2.577 |  accuracy (train batch) = 0.326 | 
+2026-02-01 12:58:35 - INFO - Improved model at step 42. New best val loss is 3.238 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 43 
+ val_loss = 3.192 |  logp_expert_action = -3.192 |  action_margin = -1.619 |  entropy = 2.560 |  accuracy = 0.197 | 
+val_loss (train batch) = 2.280 |  logp_expert_action (train batch) = -2.280 |  action_margin (train batch) = -0.609 |  entropy (train batch) = 2.514 |  accuracy (train batch) = 0.375 | 
+2026-02-01 12:58:35 - INFO - Improved model at step 43. New best val loss is 3.192 Saving weights.
+2026-02-01 12:58:35 - INFO - Validation check at train step 44 
+ val_loss = 3.196 |  logp_expert_action = -3.196 |  action_margin = -1.619 |  entropy = 2.565 |  accuracy = 0.202 | 
+val_loss (train batch) = 2.363 |  logp_expert_action (train batch) = -2.363 |  action_margin (train batch) = -0.706 |  entropy (train batch) = 2.510 |  accuracy (train batch) = 0.352 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 49
+2026-02-01 12:58:35 - INFO - Validation check at train step 45 
+ val_loss = 3.234 |  logp_expert_action = -3.234 |  action_margin = -1.669 |  entropy = 2.557 |  accuracy = 0.225 | 
+val_loss (train batch) = 2.275 |  logp_expert_action (train batch) = -2.275 |  action_margin (train batch) = -0.660 |  entropy (train batch) = 2.522 |  accuracy (train batch) = 0.348 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 48
+2026-02-01 12:58:35 - INFO - Validation check at train step 46 
+ val_loss = 3.244 |  logp_expert_action = -3.244 |  action_margin = -1.703 |  entropy = 2.497 |  accuracy = 0.236 | 
+val_loss (train batch) = 2.227 |  logp_expert_action (train batch) = -2.227 |  action_margin (train batch) = -0.637 |  entropy (train batch) = 2.412 |  accuracy (train batch) = 0.376 | 
+2026-02-01 12:58:35 - DEBUG - Patience left: 47
+2026-02-01 12:58:36 - INFO - Validation check at train step 47 
+ val_loss = 3.257 |  logp_expert_action = -3.257 |  action_margin = -1.737 |  entropy = 2.447 |  accuracy = 0.270 | 
+val_loss (train batch) = 2.241 |  logp_expert_action (train batch) = -2.241 |  action_margin (train batch) = -0.677 |  entropy (train batch) = 2.389 |  accuracy (train batch) = 0.393 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 46
+2026-02-01 12:58:36 - INFO - Validation check at train step 48 
+ val_loss = 3.231 |  logp_expert_action = -3.231 |  action_margin = -1.728 |  entropy = 2.413 |  accuracy = 0.275 | 
+val_loss (train batch) = 2.240 |  logp_expert_action (train batch) = -2.240 |  action_margin (train batch) = -0.668 |  entropy (train batch) = 2.362 |  accuracy (train batch) = 0.356 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 45
+2026-02-01 12:58:36 - INFO - Validation check at train step 49 
+ val_loss = 3.216 |  logp_expert_action = -3.216 |  action_margin = -1.724 |  entropy = 2.395 |  accuracy = 0.275 | 
+val_loss (train batch) = 2.233 |  logp_expert_action (train batch) = -2.233 |  action_margin (train batch) = -0.634 |  entropy (train batch) = 2.382 |  accuracy (train batch) = 0.369 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 44
+2026-02-01 12:58:36 - INFO - Validation check at train step 50 
+ val_loss = 3.199 |  logp_expert_action = -3.199 |  action_margin = -1.710 |  entropy = 2.368 |  accuracy = 0.281 | 
+val_loss (train batch) = 2.206 |  logp_expert_action (train batch) = -2.206 |  action_margin (train batch) = -0.640 |  entropy (train batch) = 2.342 |  accuracy (train batch) = 0.357 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 43
+2026-02-01 12:58:36 - INFO - Validation check at train step 51 
+ val_loss = 3.190 |  logp_expert_action = -3.190 |  action_margin = -1.680 |  entropy = 2.361 |  accuracy = 0.315 | 
+val_loss (train batch) = 2.170 |  logp_expert_action (train batch) = -2.170 |  action_margin (train batch) = -0.580 |  entropy (train batch) = 2.350 |  accuracy (train batch) = 0.361 | 
+2026-02-01 12:58:36 - INFO - Improved model at step 51. New best val loss is 3.190 Saving weights.
+2026-02-01 12:58:36 - INFO - Validation check at train step 52 
+ val_loss = 3.229 |  logp_expert_action = -3.229 |  action_margin = -1.734 |  entropy = 2.352 |  accuracy = 0.287 | 
+val_loss (train batch) = 2.120 |  logp_expert_action (train batch) = -2.120 |  action_margin (train batch) = -0.562 |  entropy (train batch) = 2.300 |  accuracy (train batch) = 0.365 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 49
+2026-02-01 12:58:36 - INFO - Validation check at train step 53 
+ val_loss = 3.290 |  logp_expert_action = -3.290 |  action_margin = -1.817 |  entropy = 2.379 |  accuracy = 0.253 | 
+val_loss (train batch) = 2.198 |  logp_expert_action (train batch) = -2.198 |  action_margin (train batch) = -0.662 |  entropy (train batch) = 2.305 |  accuracy (train batch) = 0.356 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 48
+2026-02-01 12:58:36 - INFO - Validation check at train step 54 
+ val_loss = 3.266 |  logp_expert_action = -3.266 |  action_margin = -1.784 |  entropy = 2.374 |  accuracy = 0.264 | 
+val_loss (train batch) = 2.089 |  logp_expert_action (train batch) = -2.089 |  action_margin (train batch) = -0.504 |  entropy (train batch) = 2.315 |  accuracy (train batch) = 0.407 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 47
+2026-02-01 12:58:36 - INFO - Validation check at train step 55 
+ val_loss = 3.294 |  logp_expert_action = -3.294 |  action_margin = -1.861 |  entropy = 2.310 |  accuracy = 0.236 | 
+val_loss (train batch) = 2.068 |  logp_expert_action (train batch) = -2.068 |  action_margin (train batch) = -0.499 |  entropy (train batch) = 2.270 |  accuracy (train batch) = 0.419 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 46
+2026-02-01 12:58:36 - INFO - Validation check at train step 56 
+ val_loss = 3.312 |  logp_expert_action = -3.312 |  action_margin = -1.955 |  entropy = 2.234 |  accuracy = 0.230 | 
+val_loss (train batch) = 2.025 |  logp_expert_action (train batch) = -2.025 |  action_margin (train batch) = -0.518 |  entropy (train batch) = 2.169 |  accuracy (train batch) = 0.404 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 45
+2026-02-01 12:58:36 - INFO - Validation check at train step 57 
+ val_loss = 3.291 |  logp_expert_action = -3.291 |  action_margin = -1.910 |  entropy = 2.243 |  accuracy = 0.236 | 
+val_loss (train batch) = 2.055 |  logp_expert_action (train batch) = -2.055 |  action_margin (train batch) = -0.505 |  entropy (train batch) = 2.212 |  accuracy (train batch) = 0.425 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 44
+2026-02-01 12:58:36 - INFO - Validation check at train step 58 
+ val_loss = 3.230 |  logp_expert_action = -3.230 |  action_margin = -1.808 |  entropy = 2.266 |  accuracy = 0.264 | 
+val_loss (train batch) = 2.137 |  logp_expert_action (train batch) = -2.137 |  action_margin (train batch) = -0.579 |  entropy (train batch) = 2.216 |  accuracy (train batch) = 0.379 | 
+2026-02-01 12:58:36 - DEBUG - Patience left: 43
+2026-02-01 12:58:36 - INFO - Validation check at train step 59 
+ val_loss = 3.156 |  logp_expert_action = -3.156 |  action_margin = -1.659 |  entropy = 2.279 |  accuracy = 0.275 | 
+val_loss (train batch) = 2.038 |  logp_expert_action (train batch) = -2.038 |  action_margin (train batch) = -0.434 |  entropy (train batch) = 2.255 |  accuracy (train batch) = 0.393 | 
+2026-02-01 12:58:36 - INFO - Improved model at step 59. New best val loss is 3.156 Saving weights.
+2026-02-01 12:58:37 - INFO - Validation check at train step 60 
+ val_loss = 3.180 |  logp_expert_action = -3.180 |  action_margin = -1.688 |  entropy = 2.304 |  accuracy = 0.270 | 
+val_loss (train batch) = 1.998 |  logp_expert_action (train batch) = -1.998 |  action_margin (train batch) = -0.438 |  entropy (train batch) = 2.247 |  accuracy (train batch) = 0.402 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 49
+2026-02-01 12:58:37 - INFO - Validation check at train step 61 
+ val_loss = 3.220 |  logp_expert_action = -3.220 |  action_margin = -1.719 |  entropy = 2.306 |  accuracy = 0.309 | 
+val_loss (train batch) = 2.003 |  logp_expert_action (train batch) = -2.003 |  action_margin (train batch) = -0.422 |  entropy (train batch) = 2.264 |  accuracy (train batch) = 0.426 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 48
+2026-02-01 12:58:37 - INFO - Validation check at train step 62 
+ val_loss = 3.235 |  logp_expert_action = -3.235 |  action_margin = -1.735 |  entropy = 2.309 |  accuracy = 0.298 | 
+val_loss (train batch) = 2.053 |  logp_expert_action (train batch) = -2.053 |  action_margin (train batch) = -0.480 |  entropy (train batch) = 2.288 |  accuracy (train batch) = 0.391 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 47
+2026-02-01 12:58:37 - INFO - Validation check at train step 63 
+ val_loss = 3.245 |  logp_expert_action = -3.245 |  action_margin = -1.762 |  entropy = 2.252 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.987 |  logp_expert_action (train batch) = -1.987 |  action_margin (train batch) = -0.443 |  entropy (train batch) = 2.231 |  accuracy (train batch) = 0.407 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 46
+2026-02-01 12:58:37 - INFO - Validation check at train step 64 
+ val_loss = 3.273 |  logp_expert_action = -3.273 |  action_margin = -1.848 |  entropy = 2.201 |  accuracy = 0.270 | 
+val_loss (train batch) = 1.919 |  logp_expert_action (train batch) = -1.919 |  action_margin (train batch) = -0.415 |  entropy (train batch) = 2.150 |  accuracy (train batch) = 0.409 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 45
+2026-02-01 12:58:37 - INFO - Validation check at train step 65 
+ val_loss = 3.266 |  logp_expert_action = -3.266 |  action_margin = -1.857 |  entropy = 2.171 |  accuracy = 0.264 | 
+val_loss (train batch) = 1.902 |  logp_expert_action (train batch) = -1.902 |  action_margin (train batch) = -0.366 |  entropy (train batch) = 2.147 |  accuracy (train batch) = 0.418 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 44
+2026-02-01 12:58:37 - INFO - Validation check at train step 66 
+ val_loss = 3.239 |  logp_expert_action = -3.239 |  action_margin = -1.842 |  entropy = 2.137 |  accuracy = 0.275 | 
+val_loss (train batch) = 1.943 |  logp_expert_action (train batch) = -1.943 |  action_margin (train batch) = -0.448 |  entropy (train batch) = 2.119 |  accuracy (train batch) = 0.431 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 43
+2026-02-01 12:58:37 - INFO - Validation check at train step 67 
+ val_loss = 3.215 |  logp_expert_action = -3.215 |  action_margin = -1.842 |  entropy = 2.108 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.863 |  logp_expert_action (train batch) = -1.863 |  action_margin (train batch) = -0.390 |  entropy (train batch) = 2.029 |  accuracy (train batch) = 0.413 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 42
+2026-02-01 12:58:37 - INFO - Validation check at train step 68 
+ val_loss = 3.271 |  logp_expert_action = -3.271 |  action_margin = -1.906 |  entropy = 2.111 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.913 |  logp_expert_action (train batch) = -1.913 |  action_margin (train batch) = -0.413 |  entropy (train batch) = 2.068 |  accuracy (train batch) = 0.407 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 41
+2026-02-01 12:58:37 - INFO - Validation check at train step 69 
+ val_loss = 3.277 |  logp_expert_action = -3.277 |  action_margin = -1.925 |  entropy = 2.071 |  accuracy = 0.298 | 
+val_loss (train batch) = 1.816 |  logp_expert_action (train batch) = -1.816 |  action_margin (train batch) = -0.332 |  entropy (train batch) = 2.051 |  accuracy (train batch) = 0.439 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 40
+2026-02-01 12:58:37 - INFO - Validation check at train step 70 
+ val_loss = 3.330 |  logp_expert_action = -3.330 |  action_margin = -2.013 |  entropy = 2.020 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.840 |  logp_expert_action (train batch) = -1.840 |  action_margin (train batch) = -0.388 |  entropy (train batch) = 1.978 |  accuracy (train batch) = 0.448 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 39
+2026-02-01 12:58:37 - INFO - Validation check at train step 71 
+ val_loss = 3.316 |  logp_expert_action = -3.316 |  action_margin = -1.986 |  entropy = 2.014 |  accuracy = 0.258 | 
+val_loss (train batch) = 1.825 |  logp_expert_action (train batch) = -1.825 |  action_margin (train batch) = -0.356 |  entropy (train batch) = 1.968 |  accuracy (train batch) = 0.422 | 
+2026-02-01 12:58:37 - DEBUG - Patience left: 38
+2026-02-01 12:58:38 - INFO - Validation check at train step 72 
+ val_loss = 3.333 |  logp_expert_action = -3.333 |  action_margin = -2.000 |  entropy = 2.036 |  accuracy = 0.230 | 
+val_loss (train batch) = 1.814 |  logp_expert_action (train batch) = -1.814 |  action_margin (train batch) = -0.302 |  entropy (train batch) = 1.985 |  accuracy (train batch) = 0.449 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 37
+2026-02-01 12:58:38 - INFO - Validation check at train step 73 
+ val_loss = 3.222 |  logp_expert_action = -3.222 |  action_margin = -1.847 |  entropy = 2.028 |  accuracy = 0.315 | 
+val_loss (train batch) = 1.841 |  logp_expert_action (train batch) = -1.841 |  action_margin (train batch) = -0.358 |  entropy (train batch) = 1.980 |  accuracy (train batch) = 0.452 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 36
+2026-02-01 12:58:38 - INFO - Validation check at train step 74 
+ val_loss = 3.258 |  logp_expert_action = -3.258 |  action_margin = -1.922 |  entropy = 2.038 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.836 |  logp_expert_action (train batch) = -1.836 |  action_margin (train batch) = -0.344 |  entropy (train batch) = 2.039 |  accuracy (train batch) = 0.420 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 35
+2026-02-01 12:58:38 - INFO - Validation check at train step 75 
+ val_loss = 3.243 |  logp_expert_action = -3.243 |  action_margin = -1.883 |  entropy = 2.039 |  accuracy = 0.275 | 
+val_loss (train batch) = 1.803 |  logp_expert_action (train batch) = -1.803 |  action_margin (train batch) = -0.331 |  entropy (train batch) = 2.029 |  accuracy (train batch) = 0.427 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 34
+2026-02-01 12:58:38 - INFO - Validation check at train step 76 
+ val_loss = 3.286 |  logp_expert_action = -3.286 |  action_margin = -1.975 |  entropy = 2.025 |  accuracy = 0.258 | 
+val_loss (train batch) = 1.803 |  logp_expert_action (train batch) = -1.803 |  action_margin (train batch) = -0.330 |  entropy (train batch) = 1.978 |  accuracy (train batch) = 0.446 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 33
+2026-02-01 12:58:38 - INFO - Validation check at train step 77 
+ val_loss = 3.282 |  logp_expert_action = -3.282 |  action_margin = -1.977 |  entropy = 2.009 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.733 |  logp_expert_action (train batch) = -1.733 |  action_margin (train batch) = -0.204 |  entropy (train batch) = 1.993 |  accuracy (train batch) = 0.464 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 32
+2026-02-01 12:58:38 - INFO - Validation check at train step 78 
+ val_loss = 3.325 |  logp_expert_action = -3.325 |  action_margin = -1.995 |  entropy = 2.001 |  accuracy = 0.298 | 
+val_loss (train batch) = 1.778 |  logp_expert_action (train batch) = -1.778 |  action_margin (train batch) = -0.281 |  entropy (train batch) = 1.950 |  accuracy (train batch) = 0.452 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 31
+2026-02-01 12:58:38 - INFO - Validation check at train step 79 
+ val_loss = 3.319 |  logp_expert_action = -3.319 |  action_margin = -1.948 |  entropy = 1.976 |  accuracy = 0.315 | 
+val_loss (train batch) = 1.700 |  logp_expert_action (train batch) = -1.700 |  action_margin (train batch) = -0.157 |  entropy (train batch) = 1.931 |  accuracy (train batch) = 0.472 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 30
+2026-02-01 12:58:38 - INFO - Validation check at train step 80 
+ val_loss = 3.316 |  logp_expert_action = -3.316 |  action_margin = -1.970 |  entropy = 1.948 |  accuracy = 0.292 | 
+val_loss (train batch) = 1.727 |  logp_expert_action (train batch) = -1.727 |  action_margin (train batch) = -0.263 |  entropy (train batch) = 1.872 |  accuracy (train batch) = 0.446 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 29
+2026-02-01 12:58:38 - INFO - Validation check at train step 81 
+ val_loss = 3.289 |  logp_expert_action = -3.289 |  action_margin = -1.958 |  entropy = 1.974 |  accuracy = 0.303 | 
+val_loss (train batch) = 1.721 |  logp_expert_action (train batch) = -1.721 |  action_margin (train batch) = -0.238 |  entropy (train batch) = 1.893 |  accuracy (train batch) = 0.459 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 28
+2026-02-01 12:58:38 - INFO - Validation check at train step 82 
+ val_loss = 3.216 |  logp_expert_action = -3.216 |  action_margin = -1.882 |  entropy = 1.993 |  accuracy = 0.331 | 
+val_loss (train batch) = 1.720 |  logp_expert_action (train batch) = -1.720 |  action_margin (train batch) = -0.278 |  entropy (train batch) = 1.940 |  accuracy (train batch) = 0.465 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 27
+2026-02-01 12:58:38 - INFO - Validation check at train step 83 
+ val_loss = 3.198 |  logp_expert_action = -3.198 |  action_margin = -1.887 |  entropy = 2.000 |  accuracy = 0.348 | 
+val_loss (train batch) = 1.756 |  logp_expert_action (train batch) = -1.756 |  action_margin (train batch) = -0.328 |  entropy (train batch) = 1.939 |  accuracy (train batch) = 0.458 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 26
+2026-02-01 12:58:38 - INFO - Validation check at train step 84 
+ val_loss = 3.263 |  logp_expert_action = -3.263 |  action_margin = -1.952 |  entropy = 1.947 |  accuracy = 0.320 | 
+val_loss (train batch) = 1.655 |  logp_expert_action (train batch) = -1.655 |  action_margin (train batch) = -0.185 |  entropy (train batch) = 1.883 |  accuracy (train batch) = 0.501 | 
+2026-02-01 12:58:38 - DEBUG - Patience left: 25
+2026-02-01 12:58:39 - INFO - Validation check at train step 85 
+ val_loss = 3.352 |  logp_expert_action = -3.352 |  action_margin = -2.018 |  entropy = 1.906 |  accuracy = 0.303 | 
+val_loss (train batch) = 1.719 |  logp_expert_action (train batch) = -1.719 |  action_margin (train batch) = -0.282 |  entropy (train batch) = 1.925 |  accuracy (train batch) = 0.455 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 24
+2026-02-01 12:58:39 - INFO - Validation check at train step 86 
+ val_loss = 3.400 |  logp_expert_action = -3.400 |  action_margin = -2.073 |  entropy = 1.876 |  accuracy = 0.303 | 
+val_loss (train batch) = 1.609 |  logp_expert_action (train batch) = -1.609 |  action_margin (train batch) = -0.081 |  entropy (train batch) = 1.847 |  accuracy (train batch) = 0.484 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 23
+2026-02-01 12:58:39 - INFO - Validation check at train step 87 
+ val_loss = 3.443 |  logp_expert_action = -3.443 |  action_margin = -2.124 |  entropy = 1.863 |  accuracy = 0.298 | 
+val_loss (train batch) = 1.661 |  logp_expert_action (train batch) = -1.661 |  action_margin (train batch) = -0.155 |  entropy (train batch) = 1.863 |  accuracy (train batch) = 0.464 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 22
+2026-02-01 12:58:39 - INFO - Validation check at train step 88 
+ val_loss = 3.426 |  logp_expert_action = -3.426 |  action_margin = -2.110 |  entropy = 1.846 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.649 |  logp_expert_action (train batch) = -1.649 |  action_margin (train batch) = -0.181 |  entropy (train batch) = 1.824 |  accuracy (train batch) = 0.492 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 21
+2026-02-01 12:58:39 - INFO - Validation check at train step 89 
+ val_loss = 3.415 |  logp_expert_action = -3.415 |  action_margin = -2.147 |  entropy = 1.826 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.658 |  logp_expert_action (train batch) = -1.658 |  action_margin (train batch) = -0.226 |  entropy (train batch) = 1.799 |  accuracy (train batch) = 0.463 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 20
+2026-02-01 12:58:39 - INFO - Validation check at train step 90 
+ val_loss = 3.364 |  logp_expert_action = -3.364 |  action_margin = -2.085 |  entropy = 1.835 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.660 |  logp_expert_action (train batch) = -1.660 |  action_margin (train batch) = -0.236 |  entropy (train batch) = 1.780 |  accuracy (train batch) = 0.483 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 19
+2026-02-01 12:58:39 - INFO - Validation check at train step 91 
+ val_loss = 3.329 |  logp_expert_action = -3.329 |  action_margin = -2.025 |  entropy = 1.855 |  accuracy = 0.303 | 
+val_loss (train batch) = 1.644 |  logp_expert_action (train batch) = -1.644 |  action_margin (train batch) = -0.220 |  entropy (train batch) = 1.809 |  accuracy (train batch) = 0.472 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 18
+2026-02-01 12:58:39 - INFO - Validation check at train step 92 
+ val_loss = 3.367 |  logp_expert_action = -3.367 |  action_margin = -2.036 |  entropy = 1.830 |  accuracy = 0.309 | 
+val_loss (train batch) = 1.621 |  logp_expert_action (train batch) = -1.621 |  action_margin (train batch) = -0.161 |  entropy (train batch) = 1.784 |  accuracy (train batch) = 0.480 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 17
+2026-02-01 12:58:39 - INFO - Validation check at train step 93 
+ val_loss = 3.401 |  logp_expert_action = -3.401 |  action_margin = -2.075 |  entropy = 1.812 |  accuracy = 0.298 | 
+val_loss (train batch) = 1.609 |  logp_expert_action (train batch) = -1.609 |  action_margin (train batch) = -0.122 |  entropy (train batch) = 1.780 |  accuracy (train batch) = 0.481 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 16
+2026-02-01 12:58:39 - INFO - Validation check at train step 94 
+ val_loss = 3.421 |  logp_expert_action = -3.421 |  action_margin = -2.101 |  entropy = 1.845 |  accuracy = 0.253 | 
+val_loss (train batch) = 1.658 |  logp_expert_action (train batch) = -1.658 |  action_margin (train batch) = -0.176 |  entropy (train batch) = 1.836 |  accuracy (train batch) = 0.463 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 15
+2026-02-01 12:58:39 - INFO - Validation check at train step 95 
+ val_loss = 3.383 |  logp_expert_action = -3.383 |  action_margin = -2.052 |  entropy = 1.885 |  accuracy = 0.303 | 
+val_loss (train batch) = 1.599 |  logp_expert_action (train batch) = -1.599 |  action_margin (train batch) = -0.159 |  entropy (train batch) = 1.800 |  accuracy (train batch) = 0.489 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 14
+2026-02-01 12:58:39 - INFO - Validation check at train step 96 
+ val_loss = 3.383 |  logp_expert_action = -3.383 |  action_margin = -2.057 |  entropy = 1.918 |  accuracy = 0.326 | 
+val_loss (train batch) = 1.556 |  logp_expert_action (train batch) = -1.556 |  action_margin (train batch) = -0.095 |  entropy (train batch) = 1.822 |  accuracy (train batch) = 0.507 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 13
+2026-02-01 12:58:39 - INFO - Validation check at train step 97 
+ val_loss = 3.437 |  logp_expert_action = -3.437 |  action_margin = -2.174 |  entropy = 1.881 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.576 |  logp_expert_action (train batch) = -1.576 |  action_margin (train batch) = -0.123 |  entropy (train batch) = 1.814 |  accuracy (train batch) = 0.480 | 
+2026-02-01 12:58:39 - DEBUG - Patience left: 12
+2026-02-01 12:58:40 - INFO - Validation check at train step 98 
+ val_loss = 3.417 |  logp_expert_action = -3.417 |  action_margin = -2.181 |  entropy = 1.822 |  accuracy = 0.287 | 
+val_loss (train batch) = 1.617 |  logp_expert_action (train batch) = -1.617 |  action_margin (train batch) = -0.210 |  entropy (train batch) = 1.754 |  accuracy (train batch) = 0.465 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 11
+2026-02-01 12:58:40 - INFO - Validation check at train step 99 
+ val_loss = 3.468 |  logp_expert_action = -3.468 |  action_margin = -2.221 |  entropy = 1.769 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.570 |  logp_expert_action (train batch) = -1.570 |  action_margin (train batch) = -0.071 |  entropy (train batch) = 1.732 |  accuracy (train batch) = 0.506 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 10
+2026-02-01 12:58:40 - INFO - Validation check at train step 100 
+ val_loss = 3.614 |  logp_expert_action = -3.614 |  action_margin = -2.376 |  entropy = 1.739 |  accuracy = 0.281 | 
+val_loss (train batch) = 1.538 |  logp_expert_action (train batch) = -1.538 |  action_margin (train batch) = -0.025 |  entropy (train batch) = 1.734 |  accuracy (train batch) = 0.515 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 9
+2026-02-01 12:58:40 - INFO - Validation check at train step 101 
+ val_loss = 3.567 |  logp_expert_action = -3.567 |  action_margin = -2.314 |  entropy = 1.759 |  accuracy = 0.292 | 
+val_loss (train batch) = 1.595 |  logp_expert_action (train batch) = -1.595 |  action_margin (train batch) = -0.143 |  entropy (train batch) = 1.752 |  accuracy (train batch) = 0.477 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 8
+2026-02-01 12:58:40 - INFO - Validation check at train step 102 
+ val_loss = 3.530 |  logp_expert_action = -3.530 |  action_margin = -2.278 |  entropy = 1.772 |  accuracy = 0.275 | 
+val_loss (train batch) = 1.555 |  logp_expert_action (train batch) = -1.555 |  action_margin (train batch) = -0.109 |  entropy (train batch) = 1.762 |  accuracy (train batch) = 0.488 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 7
+2026-02-01 12:58:40 - INFO - Validation check at train step 103 
+ val_loss = 3.517 |  logp_expert_action = -3.517 |  action_margin = -2.248 |  entropy = 1.776 |  accuracy = 0.326 | 
+val_loss (train batch) = 1.515 |  logp_expert_action (train batch) = -1.515 |  action_margin (train batch) = -0.086 |  entropy (train batch) = 1.746 |  accuracy (train batch) = 0.490 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 6
+2026-02-01 12:58:40 - INFO - Validation check at train step 104 
+ val_loss = 3.515 |  logp_expert_action = -3.515 |  action_margin = -2.266 |  entropy = 1.750 |  accuracy = 0.320 | 
+val_loss (train batch) = 1.555 |  logp_expert_action (train batch) = -1.555 |  action_margin (train batch) = -0.110 |  entropy (train batch) = 1.745 |  accuracy (train batch) = 0.494 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 5
+2026-02-01 12:58:40 - INFO - Validation check at train step 105 
+ val_loss = 3.490 |  logp_expert_action = -3.490 |  action_margin = -2.238 |  entropy = 1.692 |  accuracy = 0.326 | 
+val_loss (train batch) = 1.553 |  logp_expert_action (train batch) = -1.553 |  action_margin (train batch) = -0.126 |  entropy (train batch) = 1.654 |  accuracy (train batch) = 0.486 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 4
+2026-02-01 12:58:40 - INFO - Validation check at train step 106 
+ val_loss = 3.490 |  logp_expert_action = -3.490 |  action_margin = -2.241 |  entropy = 1.677 |  accuracy = 0.337 | 
+val_loss (train batch) = 1.519 |  logp_expert_action (train batch) = -1.519 |  action_margin (train batch) = -0.076 |  entropy (train batch) = 1.595 |  accuracy (train batch) = 0.512 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 3
+2026-02-01 12:58:40 - INFO - Validation check at train step 107 
+ val_loss = 3.472 |  logp_expert_action = -3.472 |  action_margin = -2.182 |  entropy = 1.730 |  accuracy = 0.331 | 
+val_loss (train batch) = 1.534 |  logp_expert_action (train batch) = -1.534 |  action_margin (train batch) = -0.107 |  entropy (train batch) = 1.640 |  accuracy (train batch) = 0.502 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 2
+2026-02-01 12:58:40 - INFO - Validation check at train step 108 
+ val_loss = 3.450 |  logp_expert_action = -3.450 |  action_margin = -2.151 |  entropy = 1.798 |  accuracy = 0.343 | 
+val_loss (train batch) = 1.504 |  logp_expert_action (train batch) = -1.504 |  action_margin (train batch) = -0.074 |  entropy (train batch) = 1.724 |  accuracy (train batch) = 0.475 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 1
+2026-02-01 12:58:40 - INFO - Validation check at train step 109 
+ val_loss = 3.418 |  logp_expert_action = -3.418 |  action_margin = -2.154 |  entropy = 1.806 |  accuracy = 0.337 | 
+val_loss (train batch) = 1.477 |  logp_expert_action (train batch) = -1.477 |  action_margin (train batch) = -0.065 |  entropy (train batch) = 1.736 |  accuracy (train batch) = 0.518 | 
+2026-02-01 12:58:40 - DEBUG - Patience left: 0
+2026-02-01 12:58:40 - INFO - No patience left. Ending training.
+2026-02-01 12:58:40 - INFO - Best val loss was 3.156 at epoch 60
+2026-02-01 12:58:40 - INFO - Total train time = 8.976688861846924s on cuda
+2026-02-01 12:58:40 - INFO - Training complete.
+2026-02-01 12:58:40 - INFO - Plotting training loss curve...
