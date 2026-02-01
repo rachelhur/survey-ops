@@ -224,6 +224,7 @@ def plot_fields(
     current_kwargs={},
     completed_kwargs={},
     future_kwargs={},
+    schedule_label="",
 ):
     """
     Initialize a sky view and plot of current and completed fields at a selected time.
@@ -252,6 +253,8 @@ def plot_fields(
         A SkyMap plot instance on which to plot. Defaults to creating a new instance.
     current_kwargs, completed_kwargs, future_kwargs : dict [{}]
         kwargs to pass to SkyMap.scatter while plotting fields, updating the defaults.
+    schedule_label : str [""]
+        Optional label to append to the plot title (e.g., "Expert Schedule").
 
     Returns
     -------
@@ -267,10 +270,13 @@ def plot_fields(
     )
 
     # set title to selected time
-    plt.title(
+    title_str = (
         datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
         + " UTC"
     )
+    if schedule_label:
+        title_str = f"{schedule_label}" + "\n" + title_str
+    plt.title(title_str)
 
     # plot current field
     if not np.any(np.isnan(np.asarray(current_radec, dtype=float))):
@@ -366,7 +372,7 @@ def plot_fields(
     return skymap
 
 
-def plot_fields_movie(outfile, times, field_pos):
+def plot_fields_movie(outfile, times, field_pos, schedule_label=""):
     """
     Creates a gif of fields observed over the course of a night.
 
@@ -376,10 +382,10 @@ def plot_fields_movie(outfile, times, field_pos):
         Path to output gif file.
     times : list of float
         List of times (Unix timestamps, in UTC) of observations.
-    ras : list of float
-        List of right ascensions (in radians) for each observation.
-    decs : list of float
-        List of declinations (in radians) for each observation.
+    field_pos : list of float tuples
+        List of field (ra, dec) for each observation.
+    schedule_label : str [""]
+        Optional label to append to the plot title (e.g., "Expert Schedule").
     """
 
     # ensure output file is gif
@@ -400,6 +406,7 @@ def plot_fields_movie(outfile, times, field_pos):
             current_radec=field_pos[i, :],
             completed_radec=field_pos[:i, :],
             future_radec=field_pos[i + 1 :, :],
+            schedule_label=schedule_label,
         )
         plt.savefig(os.path.join(tmpdir, "field_%08i.png" % i))
         plt.close(skymap.fig)
@@ -432,6 +439,7 @@ def plot_bins(
     sky_bin_mapping=None,
     observer=None,
     skymap=None,
+    schedule_label="",
 ):
     """
     Initialize a sky view binned into healpix grid. Optionally highlight select pixels.
@@ -468,6 +476,8 @@ def plot_bins(
         An observer instance. Defaults to blanco_observer at specified time.
     skymap : SkyMap [None]
         A SkyMap plot instance on which to plot. Defaults to creating a new instance.
+    schedule_label : str [""]
+        Optional label to append to the plot title (e.g., "Expert Schedule").
 
     Returns
     -------
@@ -483,10 +493,13 @@ def plot_bins(
     )
 
     # set title to selected time
-    plt.title(
+    title_str = (
         datetime.fromtimestamp(time, tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
         + " UTC"
     )
+    if schedule_label:
+        title_str = f"{schedule_label}" + "\n" + title_str
+    plt.title(title_str)
 
     # re-create the healpix grid
     hpgrid = ephemerides.HealpixGrid(nside=nside, is_azel=is_azel)
@@ -639,6 +652,8 @@ def plot_bins_movie(
     alternate_idxs=None,
     sky_bin_mapping=None,
     field_pos=None,
+    is_azel=False,
+    schedule_label="",
 ):
     """
     Creates a gif of fields observed over the course of a night.
@@ -661,6 +676,10 @@ def plot_bins_movie(
     field_pos : list of float tuples [None]
         List of field (ra, dec) for each observation. If provided, plots specific fields
         overlaid on the bins
+    is_azel : bool [False]
+        whether the ephemerides.HealpixGrid uses az/el (True) or RA/Dec coords (False)
+    schedule_label : str [""]
+        Optional label to append to the plot title (e.g., "Expert Schedule").
     """
 
     # ensure output file is gif
@@ -690,6 +709,8 @@ def plot_bins_movie(
             future_idxs=idxs[i + 1 :],
             nside=nside,
             sky_bin_mapping=sky_bin_mapping,
+            is_azel=is_azel,
+            schedule_label=schedule_label,
         )
 
         # plot the sky fields on the sky map
@@ -705,6 +726,7 @@ def plot_bins_movie(
                 plot_moon=False,
                 observer=None,
                 skymap=skymap,
+                schedule_label=schedule_label,
                 current_kwargs={"edgecolor": "darkgreen", "c": "forestgreen", "s": 60},
                 completed_kwargs={"edgecolor": "seagreen", "c": "none", "s": 60},
                 future_kwargs={"edgecolor": "silver", "s": 60},
@@ -737,6 +759,7 @@ def plot_schedule_whole(
     sky_bin_mapping=None,
     projection="mollweide",
     center_pos=(None, None),
+    schedule_label="",
 ):
     """
     Creates an image of the areas visited at any point in the schedule on a Mollweide
@@ -769,6 +792,8 @@ def plot_schedule_whole(
     center_pos : float tuple (None, None)
         Center (ra, dec) for the map. Default plots the average (ra, dec) for the
         schedule, using field positions instead of bin positions if available.
+    schedule_label : str [""]
+        Optional label to append to the plot title (e.g., "Expert Schedule").
     """
 
     # check required arguments
@@ -915,7 +940,7 @@ def plot_schedule_whole(
     )
 
     # set plot title
-    plt.title(
+    title_str = (
         datetime.fromtimestamp(times[0], tz=timezone.utc).strftime("%Y/%m/%d %H:%M:%S")
         + " UTC -- "
         + datetime.fromtimestamp(times[-1], tz=timezone.utc).strftime(
@@ -923,6 +948,9 @@ def plot_schedule_whole(
         )
         + " UTC"
     )
+    if schedule_label:
+        title_str = f"{schedule_label}" + "\n" + title_str
+    plt.title(title_str)
 
     # save the figure
     plt.savefig(outfile)
@@ -931,10 +959,222 @@ def plot_schedule_whole(
     return
 
 
-if __name__ == "__main__":
+def plot_schedule_from_file(
+    outfile,
+    schedule_file,
+    plot_type,
+    nside=None,
+    fields_file=None,
+    bins_file=None,
+    whole=False,
+    compare=False,
+    expert=False,
+    is_azel=False,
+    mollweide=False,
+):
+    """
+    Load a schedule from file and create plots (movie or whole-schedule view).
+
+    This is a convenience function that wraps the plotting logic for programmatic use.
+    For command-line usage, use the script directly (see `if __name__ == "__main__"`).
+
+    Arguments
+    ---------
+    outfile : str
+        Path to output file (expects .gif for movies, .png etc for whole-schedule plots)
+    schedule_file : str
+        Path to the schedule CSV file with keys "expert_timestamp" and/or
+        "agent_timestamp", plus some combination of "expert_field_id", "agent_field_id",
+        "expert_bin_id", "agent_bin_id".
+    plot_type : str
+        Type of plot: "field", "bin", or "fieldbin".
+    nside : int [None]
+        nside for healpix sky bins. Required if plot_type is "bin" or "fieldbin".
+    fields_file : str [None]
+        Path to field mapping JSON file (maps field_id to (ra, dec) in radians).
+    bins_file : str [None]
+        Path to bin mapping JSON file (maps bin_id to (ra, dec) in radians). Not
+        required if nside is provided, but used for validation if present.
+    whole : bool [False]
+        If True, plot whole schedule on flat sky. If False, create movie.
+    compare : bool [False]
+        If True, plot comparison of expert vs agent schedules.
+    expert : bool [False]
+        If True, plot expert schedule as primary. If False, plot agent schedule.
+    is_azel : bool [False]
+        If True, use az/el healpix grid instead of RA/Dec for bin plots.
+    mollweide : bool [False]
+        If True, use Mollweide projection. If False, use orthographic projection.
+
+    Returns
+    -------
+    None
+        Creates output file(s) as side effect.
+    """
     import json
-    import argparse as ap
     import pandas as pd
+
+    # check argument compatibility
+    if plot_type not in ["field", "bin", "fieldbin"]:
+        raise ValueError(
+            f'plot_type must be "field", "bin", or "fieldbin", got "{plot_type}"'
+        )
+    if plot_type in ["field", "fieldbin"] and fields_file is None:
+        raise ValueError("fields_file required to plot fields.")
+    if plot_type in ["bin", "fieldbin"] and nside is None:
+        raise ValueError("nside required to plot bins.")
+    if plot_type == "field" and compare and not whole:
+        raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
+    if mollweide and not whole:
+        raise NotImplementedError("Currently, can only plot ortho for movies.")
+    if is_azel and plot_type not in ["bin", "fieldbin"]:
+        raise NotImplementedError("Az/el healpix only implemented for bin plots.")
+    if is_azel and whole:
+        raise NotImplementedError("Az/el healpix not implemented for whole-sky plots.")
+
+    # load schedule file and check validity
+    schedule = pd.read_csv(schedule_file)
+
+    # determine primary and alternate schedule prefixes
+    primary_prefix = "expert" if expert else "agent"
+    alternate_prefix = "agent" if expert else "expert"
+    primary_label = "Expert Schedule" if expert else "Agent Schedule"
+    alternate_label = "Agent Schedule" if expert else "Expert Schedule"
+    primary_time_key = f"{primary_prefix}_timestamp"
+    alternate_time_key = f"{alternate_prefix}_timestamp"
+
+    # check for required columns
+    if primary_time_key not in schedule.columns:
+        raise KeyError(f'Missing "{primary_time_key}" required to make requested plot.')
+    if compare and alternate_time_key not in schedule.columns:
+        raise KeyError(f'Missing "{alternate_time_key}" required to compare schedules.')
+    if plot_type in ["field", "fieldbin"]:
+        if f"{primary_prefix}_field_id" not in schedule.columns:
+            raise KeyError(
+                f'Missing "{primary_prefix}_field_id" required to make requested plot.'
+            )
+        if compare and f"{alternate_prefix}_field_id" not in schedule.columns:
+            raise KeyError(
+                f'Missing "{alternate_prefix}_field_id" required to compare schedules.'
+            )
+    if plot_type in ["bin", "fieldbin"]:
+        if f"{primary_prefix}_bin_id" not in schedule.columns:
+            raise KeyError(
+                f'Missing "{primary_prefix}_bin_id" required to make requested plot.'
+            )
+        if compare and f"{alternate_prefix}_bin_id" not in schedule.columns:
+            raise KeyError(
+                f'Missing "{alternate_prefix}_bin_id" required to compare schedules.'
+            )
+
+    # read in times and filter out unphysical entries
+    times = np.asarray(schedule[primary_time_key].values, dtype=int)
+    valid = times != 0
+    schedule = schedule[valid].reset_index(drop=True)
+    times = times[valid]
+
+    # load field and bin mappings
+    field_id2pos = None
+    if fields_file is not None:
+        with open(fields_file) as f:
+            field_id2pos = json.load(f)
+    bin_id2pos = None
+    if bins_file is not None:
+        with open(bins_file) as f:
+            bin_id2pos = json.load(f)
+
+    # parse field, bin positions
+    field_ids_1 = schedule.get(f"{primary_prefix}_field_id", None)
+    field_ids_2 = (
+        schedule.get(f"{alternate_prefix}_field_id", None) if compare else None
+    )
+    if field_ids_1 is None or field_id2pos is None:
+        field_pos_1 = None
+    else:
+        field_pos_1 = np.asarray(
+            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
+        )
+    if field_ids_2 is None or field_id2pos is None:
+        field_pos_2 = None
+    else:
+        field_pos_2 = np.asarray(
+            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_2.values]
+        )
+    bin_ids_1 = schedule.get(f"{primary_prefix}_bin_id", None)
+    bin_ids_2 = schedule.get(f"{alternate_prefix}_bin_id", None) if compare else None
+
+    # plot whole schedules
+    if whole:
+        if not compare:  # 1 plot of plot_type style
+            ofs = [outfile]
+            fps = [field_pos_1 if plot_type in ["field", "fieldbin"] else None]
+            bis = [bin_ids_1 if plot_type in ["bin", "fieldbin"] else None]
+            abis = [None]
+            slabels = [primary_label]
+        else:  # 2 (field) or 3 (bin/fieldbin) plots when comparing
+            base, ext = os.path.splitext(outfile)
+            if "bin" in plot_type:
+                ofs = [base + "_%s" % i + ext for i in range(3)]
+                fps = (
+                    [field_pos_1, field_pos_2, None]
+                    if "field" in plot_type
+                    else [None, None, None]
+                )
+                bis = [bin_ids_1, bin_ids_2, bin_ids_1]
+                abis = [None, None, bin_ids_2]
+                slabels = [
+                    primary_label,
+                    alternate_label,
+                    f"{primary_label} vs {alternate_label}",
+                ]
+            else:
+                ofs = [base + "_%s" % i + ext for i in range(2)]
+                fps = [field_pos_1, field_pos_2]
+                bis = [None, None]
+                abis = [None, None]
+                slabels = [primary_label, alternate_label]
+        for i, (of, fp, bi, abi, slabel) in enumerate(
+            zip(ofs, fps, bis, abis, slabels)
+        ):
+            plot_schedule_whole(
+                outfile=of,
+                times=times,
+                field_pos=fp,
+                bin_idxs=bi,
+                alternate_bin_idxs=abi,
+                nside=nside,
+                sky_bin_mapping=bin_id2pos,
+                projection="mollweide" if mollweide else "ortho",
+                center_pos=(None, None),
+                schedule_label=slabel,
+            )
+
+    # plot movies of just fields
+    elif plot_type == "field":
+        plot_fields_movie(
+            outfile=outfile,
+            times=times,
+            field_pos=field_pos_1,
+            schedule_label=primary_label,
+        )
+
+    # plot movies of bins or combined field+bin
+    else:
+        plot_bins_movie(
+            outfile=outfile,
+            nside=nside,
+            times=times,
+            idxs=bin_ids_1.values,
+            alternate_idxs=bin_ids_2.values if compare else None,
+            sky_bin_mapping=bin_id2pos,
+            field_pos=field_pos_1 if plot_type == "fieldbin" else None,
+            is_azel=is_azel,
+            schedule_label=primary_label,
+        )
+
+
+if __name__ == "__main__":
+    import argparse as ap
 
     # command line arguments
     parser = ap.ArgumentParser(
@@ -953,8 +1193,9 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help=(
-            'Path to the schedule file, a csv file with keys "time" and some '
-            'combination of "field_id", "policy_field_id", "bin_id", "policy_bin_id".'
+            'Path to the schedule file, a csv file with keys "expert_timestamp" and/or '
+            '"agent_timestamp", plus some combination of "expert_field_id", '
+            '"agent_field_id", "expert_bin_id", "agent_bin_id".'
         ),
     )
     parser.add_argument(
@@ -965,7 +1206,8 @@ if __name__ == "__main__":
         choices=["field", "bin", "fieldbin"],
         help=(
             'Whether to plot schedule of "field", "bin", or combined "fieldbin". '
-            'Requires "(policy_)field_id" and/or "(policy_)bin_id" keys, respectively.'
+            'Requires "(expert_/agent_)field_id" and/or "(expert_/agent_)bin_id" keys, '
+            "respectively."
         ),
     )
     parser.add_argument(
@@ -979,19 +1221,18 @@ if __name__ == "__main__":
         "--compare",
         action="store_true",
         help=(
-            "Switch to plot a comparison of two schedules, identified as with/without "
-            '"policy_" in the schedule file.'
+            "Switch to plot a comparison of two schedules (expert vs agent). "
+            "Requires both expert_* and agent_* columns in the schedule file."
         ),
     )
     parser.add_argument(
-        "-p",
-        "--policy",
+        "-e",
+        "--expert",
         action="store_true",
         help=(
-            'Switch to plot "policy_" schedule keys as the primary schedule. When '
-            'plotting fields, this selects "policy_field_id" instead of "field_id". '
-            'When plotting bins, this uses "policy_bin_id" as the primary schedule, and'
-            ' "bin_id" as the alternate schedule if using the compare option.'
+            'Switch to plot "expert_*" schedule keys as the primary schedule. '
+            'Default is to plot "agent_*" schedule keys as the primary schedule. '
+            "When comparing, the alternate schedule will be the other one."
         ),
     )
     parser.add_argument(
@@ -1020,6 +1261,15 @@ if __name__ == "__main__":
         help="nside used to make healpix sky bin for bin schedules",
     )
     parser.add_argument(
+        "-a",
+        "--azel",
+        action="store_true",
+        help=(
+            "Switch to use az/el healpix grid instead of RA/Dec grid for bin plots. "
+            "Expects the schedule bin_ids and bin file to map id to (az, el) in rad."
+        ),
+    )
+    parser.add_argument(
         "-m",
         "--mollweide",
         action="store_true",
@@ -1027,107 +1277,17 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # check argument compatibility
-    if args.plot_type in ["field", "fieldbin"] and len(args.fields) == 0:
-        raise ValueError("field file required to plot fields.")
-    if args.plot_type in ["bin", "fieldbin"] and args.nside is None:
-        raise ValueError("nside required to plot bins.")
-    if args.plot_type == "field" and args.compare and not args.whole:
-        raise NotImplementedError("Comparing fields for 2 schedules not implemented.")
-    if args.mollweide and not args.whole:
-        raise NotImplementedError("Currently, can only plot ortho for movies.")
-
-    # load schedule file and check validity
-    schedule = pd.read_csv(args.schedule)
-    if "time" not in schedule.columns:
-        raise KeyError('Missing "time" required to make requested plot.')
-    if args.plot_type in ["field", "fieldbin"]:
-        if args.policy and "policy_field_id" not in schedule.columns:
-            raise KeyError('Missing "policy_field_id" required to make requested plot.')
-        if not args.policy and "field_id" not in schedule.columns:
-            raise KeyError('Missing "field_id" required to make requested plot.')
-    if args.plot_type in ["bin", "fieldbin"]:
-        if (args.compare or args.policy) and "policy_bin_id" not in schedule.columns:
-            raise KeyError('Missing "policy_bin_id" required to make requested plot.')
-        if (args.compare or not args.policy) and "bin_id" not in schedule.columns:
-            raise KeyError('Missing "bin_id" required to make requested plot.')
-
-    # load field and bin mappings
-    field_id2pos = None
-    if args.fields is not None:
-        with open(args.fields) as f:
-            field_id2pos = json.load(f)
-    bin_id2pos = None
-    if args.bins is not None:
-        with open(args.bins) as f:
-            bin_id2pos = json.load(f)
-
-    # parse field, bin positions
-    field_ids_1 = schedule.get("policy_field_id" if args.policy else "field_id", None)
-    field_ids_2 = schedule.get("field_id" if args.policy else "policy_field_id", None)
-    if field_ids_1 is None or field_id2pos is None:
-        field_pos_1 = None
-    else:
-        field_pos_1 = np.asarray(
-            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_1.values]
-        )
-    if field_ids_2 is None or field_id2pos is None:
-        field_pos_2 = None
-    else:
-        field_pos_2 = np.asarray(
-            [field_id2pos.get(str(fid), [None, None]) for fid in field_ids_2.values]
-        )
-    bin_ids_1 = schedule.get("policy_bin_id" if args.policy else "bin_id", None)
-    bin_ids_2 = schedule.get("bin_id" if args.policy else "policy_bin_id", None)
-
-    # call plotting functions
-    if args.whole:
-        if not args.compare:  # 1 plot of plot_type style
-            ofs = [args.outfile]
-            fps = [field_pos_1 if args.plot_type in ["field", "fieldbin"] else None]
-            bis = [bin_ids_1 if args.plot_type in ["bin", "fieldbin"] else None]
-            abis = [None]
-        else:  # 2 (field) or 3 (bin/fieldbin) plots when comparing
-            base, ext = os.path.splitext(args.outfile)
-            if "bin" in args.plot_type:
-                ofs = [base + "_%s" % i + ext for i in range(3)]
-                fps = (
-                    [field_pos_1, field_pos_2, None]
-                    if "field" in args.plot_type
-                    else [None, None, None]
-                )
-                bis = [bin_ids_1, bin_ids_2, bin_ids_1]
-                abis = [None, None, bin_ids_2]
-            else:
-                ofs = [base + "_%s" % i + ext for i in range(2)]
-                fps = [field_pos_1, field_pos_2]
-                bis = [None, None]
-                abis = [None, None]
-        for i, (of, fp, bi, abi) in enumerate(zip(ofs, fps, bis, abis)):
-            plot_schedule_whole(
-                outfile=of,
-                times=schedule["time"].values,
-                field_pos=fp,
-                bin_idxs=bi,
-                alternate_bin_idxs=abi,
-                nside=args.nside,
-                sky_bin_mapping=bin_id2pos,
-                projection="mollweide" if args.mollweide else "ortho",
-                center_pos=(None, None),
-            )
-    elif args.plot_type == "field":
-        plot_fields_movie(
-            outfile=args.outfile,
-            times=schedule["time"].values,
-            field_pos=field_pos_1,
-        )
-    else:
-        plot_bins_movie(
-            outfile=args.outfile,
-            nside=args.nside,
-            times=schedule["time"].values,
-            idxs=bin_ids_1.values,
-            alternate_idxs=bin_ids_2.values if args.compare else None,
-            sky_bin_mapping=bin_id2pos,
-            field_pos=field_pos_1 if args.plot_type == "fieldbin" else None,
-        )
+    # call the main plotting function
+    plot_schedule_from_file(
+        outfile=args.outfile,
+        schedule_file=args.schedule,
+        plot_type=args.plot_type,
+        nside=args.nside,
+        fields_file=args.fields,
+        bins_file=args.bins,
+        whole=args.whole,
+        compare=args.compare,
+        expert=args.expert,
+        is_azel=args.azel,
+        mollweide=args.mollweide,
+    )
