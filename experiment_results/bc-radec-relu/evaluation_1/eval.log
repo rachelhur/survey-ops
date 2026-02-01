@@ -1,0 +1,21 @@
+2026-01-30 15:38:13 - INFO - Saving results in ../experiment_results/bc-radec-relu/evaluation_1/
+2026-01-30 15:38:13 - WARNING - Experiment parameters:
+2026-01-30 15:38:13 - INFO - seed: 10
+2026-01-30 15:38:13 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-01-30 15:38:13 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-01-30 15:38:13 - INFO - trained_model_dir: ../experiment_results/bc-radec-relu/
+2026-01-30 15:38:13 - INFO - evaluation_name: evaluation_1
+2026-01-30 15:38:13 - INFO - specific_years: [2015]
+2026-01-30 15:38:13 - INFO - specific_months: [12, 1, 3, 8, 10]
+2026-01-30 15:38:13 - INFO - specific_days: [14]
+2026-01-30 15:38:13 - INFO - logging_level: info
+2026-01-30 15:38:13 - INFO - num_episodes: 1
+2026-01-30 15:38:13 - INFO - Loading raw data...
+2026-01-30 15:38:13 - INFO - Loaded data from json
+2026-01-30 15:38:13 - INFO - Processing raw data into OfflineDataset()...
+2026-01-30 15:38:13 - INFO - Loading test dataset with same config as training dataset...
+2026-01-30 15:38:13 - INFO - Performing inverse airmass normalization
+2026-01-30 15:38:13 - INFO - Performing max normalziation
+2026-01-30 15:38:23 - INFO - Setting up agent...
+2026-01-30 15:38:23 - INFO - Setting up environment...
+2026-01-30 15:38:23 - INFO - Starting evaluation...
