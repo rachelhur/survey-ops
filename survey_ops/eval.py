@@ -15,7 +15,7 @@ import pandas as pd
 import time
 import logging
 
-from survey_ops.plotting import *
+from survey_ops.plotting import plot_schedule_from_file
 from survey_ops.utils import pytorch_utils
 from survey_ops.src.agents import Agent
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
@@ -61,68 +61,136 @@ def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, ma
     output_filepath = save_dir + 'schedule.csv'
     df.to_csv(output_filepath, index=False)
 
-    schedule = pd.read_csv(output_filepath)
+    # schedule = pd.read_csv(output_filepath)
 
     # Create fields movies
-    plot_fields_movie(
+    logger.info("Creating field movies")
+    plot_schedule_from_file(
         outfile=save_dir + 'expert_field_schedule.gif',
-        times=schedule['expert_timestamp'],
-        field_pos=np.array([field2radec.get(str(fid), [None, None]) for fid in schedule['expert_field_id'].values])
+        schedule_file=output_filepath,
+        plot_type='field',
+        nside=nside,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=False,
     )
-    plot_fields_movie(
+    plot_schedule_from_file(
         outfile=save_dir + 'agent_field_schedule.gif',
-        times=schedule['agent_timestamp'],
-        field_pos=np.array([field2radec.get(str(fid), [None, None]) for fid in schedule['agent_field_id'].values])
+        schedule_file=output_filepath,
+        plot_type='field',
+        nside=nside,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=False,
+        is_azel=bin_space=='azel',
+        mollweide=False,
     )
 
-    # Create bin movie comparison       
-    plot_bins_movie(
+    # Create bin movies   
+    logger.info("Creating bin movies")
+    plot_schedule_from_file(
         outfile=save_dir + 'bin_comparison_schedule.gif',
+        schedule_file=output_filepath,
+        plot_type='bin',
         nside=nside,
-        times=schedule['expert_timestamp'].values,
-        idxs=schedule['expert_bin_id'].values,
-        alternate_idxs=schedule['agent_bin_id'].values,
-        sky_bin_mapping=bin2pos,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=True,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=False,
     )
-    plot_bins_movie(
+    plot_schedule_from_file(
         outfile=save_dir + 'expert_bin_schedule.gif',
+        schedule_file=output_filepath,
+        plot_type='bin',
         nside=nside,
-        times=schedule['expert_timestamp'].values,
-        idxs=schedule['expert_bin_id'].values,
-        sky_bin_mapping=bin2pos,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=False,
     )
-    plot_bins_movie(
+    plot_schedule_from_file(
         outfile=save_dir + 'agent_bin_schedule.gif',
+        schedule_file=output_filepath,
+        plot_type='bin',
         nside=nside,
-        times=schedule['agent_timestamp'].values,
-        idxs=schedule['agent_bin_id'].values,
-        sky_bin_mapping=bin2pos,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=False,
+        is_azel=bin_space=='azel',
+        mollweide=False,
+    ) 
+
+    logger.info("Creating fieldbin movies")
+    # Create binfield movies
+    plot_schedule_from_file(
+        outfile=save_dir + 'agent_fieldbin_schedule.gif',
+        schedule_file=output_filepath,
+        plot_type='fieldbin',
+        nside=nside,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=False,
+        is_azel=bin_space=='azel',
+        mollweide=False,
+    )
+    plot_schedule_from_file(
+        outfile=save_dir + 'expert_fieldbin_schedule.gif',
+        schedule_file=output_filepath,
+        plot_type='fieldbin',
+        nside=nside,
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=False,
+        compare=False,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=False,
     )
 
+    logger.info("Creating static plots")
     # Mollefield
-    plot_schedule_whole(
+    plot_schedule_from_file(
         outfile=save_dir + 'mollweide.png',
-        times=schedule['timestamp'].values,
-        field_pos=None,
-        bin_idxs=schedule['expert_bin_id'].values,
-        alternate_bin_idxs=schedule['agent_bin_id'].values,
+        schedule_file=output_filepath,
+        plot_type='bin',
         nside=nside,
-        sky_bin_mapping=bin2pos,
-        projection="mollweide",
-        center_pos=(None, None),
-    )
-    
-    plot_schedule_whole(
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=True,
+        compare=True,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=True,
+    )  
+    plot_schedule_from_file(
         outfile=save_dir + 'ortho.png',
-        times=schedule['timestamp'].values,
-        field_pos=None,
-        bin_idxs=schedule['expert_bin_id'].values,
-        alternate_bin_idxs=schedule['agent_bin_id'].values,
+        schedule_file=output_filepath,
+        plot_type='bin',
         nside=nside,
-        sky_bin_mapping=bin2pos,
-        projection="ortho",
-        center_pos=(None, None),
-    )
+        fields_file=field2radec_filepath,
+        bins_file=bin2pos_filepath,
+        whole=True,
+        compare=True,
+        expert=True,
+        is_azel=bin_space=='azel',
+        mollweide=False,
+    )  
 
 def create_gif(outfile, plot_type, times, nside=None, idxs=None, alt_idxs=None, bin2pos=None, whole=False, field2radec=None, field_idxs=None):
     if whole:
