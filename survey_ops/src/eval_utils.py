@@ -17,4 +17,5 @@ def get_fields_in_azel_bin(bin_num, timestamp, field2nvisits, field_ids, field_r
 
 def get_fields_in_radec_bin(bin_num, bin2fields_in_bin, timestamp=None, field2nvisits=None, field_ids=None, field_radecs=None, hpGrid=None, visited=None):
     bin_num = str(bin_num)
-    return bin2fields_in_bin.get(bin_num)
+    fields_in_bin = bin2fields_in_bin.get(bin_num)
+    return fields_in_bin

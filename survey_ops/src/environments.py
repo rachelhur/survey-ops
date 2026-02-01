@@ -10,6 +10,9 @@ import random
 from survey_ops.utils.geometry import angular_separation
 from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class BaseTelescope(gym.Env):
     """
@@ -277,7 +280,6 @@ class OfflineEnv(BaseTelescope):
             self.bin_space = 'radec'
             self.bin2fields_in_bin = test_dataset.bin2fields_in_bin
             self.get_fields_in_bin = get_fields_in_radec_bin
-            print('SETTING FUNCTION TO BE GET_FIELDS_IN_RADEC_BIN')
         else:
             self.bin_space = 'azel'
             self.get_fields_in_bin = get_fields_in_azel_bin
@@ -416,8 +418,11 @@ class OfflineEnv(BaseTelescope):
             self._night_idx = -1
             self._is_new_night = True
             self._start_new_night()
-            if self.bin_space == 'radec':
-                self._mask_completed_bins = np.ones(self.nbins, dtype=bool) # Only exists if is radec 
+            self._mask_completed_bins = np.zeros(self.nbins, dtype=bool) # Only exists if is radec
+            bins_with_fields = [int(item) for item in list(self.bin2fields_in_bin.keys())]
+            self._mask_completed_bins[bins_with_fields] = True
+            self._update_action_mask(action=None, time=self._timestamp)
+
         else:
             self._state = options['init_state']
             self._timestamp = options['init_timestamp']
@@ -442,8 +447,6 @@ class OfflineEnv(BaseTelescope):
         self._timestamp = first_row_in_night_pointing['timestamp']
         self._visited.append(self._field_id)
 
-        # Bin features
-        
         # first_feature_state_in_night = self.test_dataset._get_pointing_features_from_row(row=first_row_in_night)
         self._pointing_state_features = [first_row_in_night_pointing[feat_name] for feat_name in self.pointing_feature_names]
         if self.include_bin_features:
@@ -455,7 +458,7 @@ class OfflineEnv(BaseTelescope):
 
     def _get_azel_action_mask(self, timestamp):
         """
-        Returns action_mask which masks bins that are invalid, ie bins that are below horizon or bins that contain completely observed fields (defined by field2nvisits)
+        Returns action_mask which masks bins that are invalid; ie bins that are below horizon or bins that contain completely observed fields (defined by field2nvisits)
         """
         incomplete_fields_mask = np.array([self._visited.count(fid) < self.field2nvisits[fid] for fid in self.field_ids])
         fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[incomplete_fields_mask, 0], dec=self.field_radecs[incomplete_fields_mask, 1], time=timestamp)
@@ -466,31 +469,82 @@ class OfflineEnv(BaseTelescope):
 
         return action_mask
 
-    def _update_radec_action_mask(self, action, timestamp=None): #DONE
-        """
-        Updates the boolean mask that tracks valid actions (field IDs).
-
-        An action becomes invalid if the target field has already been visited
-        the maximum allowed number of times (`self.max_visits`).
-
-        Args:
-            action (int): The field ID to check and potentially mask.
-        """
+    def _get_radec_action_mask(self, action, timestamp=None):
         # If all fields in bin are fully visited, bin is no longer valid action
-        _, bin_els = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat)
+        _, bin_els = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat, time=timestamp)
         mask_below_horizon = bin_els >= 0
+        
+        if action is not None: # action is None only in self._init_to_first_state()
+            fields_in_bin = get_fields_in_radec_bin(bin_num=action, bin2fields_in_bin=self.bin2fields_in_bin)
+            for i, field_id in enumerate(fields_in_bin):
+                max_nvisits = self.field2nvisits[field_id]
+                current_nvisits = self._visited.count(field_id)
+                assert not current_nvisits > max_nvisits, "Number of field visits should never be greater than max number of allowed visits"
+                if current_nvisits < max_nvisits:
+                    break
+                else:
+                    if i == len(fields_in_bin) - 1:
+                        self._mask_completed_bins[action] = False
+        action_mask = mask_below_horizon & self._mask_completed_bins
+        return action_mask
 
-        fields_in_bin = self.get_fields_in_bin(bin_num=action, bin2fields_in_bin=self.bin2fields_in_bin)
-        for i, field_id in enumerate(fields_in_bin):
-            max_nvisits = self.field2nvisits[field_id]
-            current_nvisits = self._visited.count(field_id)
-            assert not current_nvisits > max_nvisits, "Number of field visits should never be greater than max number of allowed visits"
-            if current_nvisits < max_nvisits:
-                break
-            else:
-                if i == len(fields_in_bin):
-                    self._mask_completed_bins[action] = False
-        self._action_mask = mask_below_horizon & self._mask_completed_bins
+    def _update_pointing_features(self, field_id, timestamp, night_first_timestamp, night_final_timestamp):
+        new_features = {}
+        new_features['ra'], new_features['dec'] = self.field2radec[field_id]
+        new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
+        new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
+        
+        cos_zenith = np.cos(90 * units.deg - new_features['el'])
+        new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
+
+        new_features['sun_ra'], new_features['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=timestamp)
+        new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'], time=timestamp)
+        new_features['moon_ra'], new_features['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=timestamp)
+        new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'], time=timestamp)
+
+        if night_final_timestamp == night_first_timestamp:
+            new_features['time_fraction_since_start'] = 0
+        else:
+            new_features['time_fraction_since_start'] = (timestamp - night_first_timestamp) / (night_final_timestamp - night_first_timestamp)
+        
+        for feat_name in self.base_pointing_feature_names:
+            if any(string in feat_name and 'bin' not in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
+                new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
+                new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
+        pointing_state_features = [new_features.get(feat, 0.0) for feat in self.pointing_feature_names]
+        return pointing_state_features
+    
+    def _update_bin_features(self, timestamp):
+        if self.hpGrid.is_azel:
+            lons, lats = ephemerides.topographic_to_equatorial(az=self.hpGrid.lon, el=self.hpGrid.lat, time=timestamp)
+            lon_key = 'ra'
+            lat_key = 'dec'
+        else:
+            lons, lats = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat, time=timestamp)
+            lon_key = 'az'
+            lat_key = 'el'
+        hour_angles = self.hpGrid.get_hour_angle(time=timestamp)
+        airmasses = self.hpGrid.get_airmass(timestamp)
+        moon_dists = self.hpGrid.get_source_angular_separations('moon', time=timestamp)
+
+        features = ['ha', 'airmass', 'ang_dist_to_moon', lon_key, lat_key]
+        arrays = [hour_angles, airmasses, moon_dists, lons, lats]
+
+        new_cols = {
+            f'bin_{i}_{feat}': arr[i]
+            for i in range(len(lons))
+            for feat, arr in zip(features, arrays)
+        }
+
+        # Normalize periodic features here and add as df cols
+        if self.do_cyclical_norm:
+            for feat_name in self.base_bin_feature_names:
+                if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
+                    new_cols[f'{feat_name}_cos'] = np.cos(new_cols[feat_name])
+                    new_cols[f'{feat_name}_sin'] = np.sin(new_cols[feat_name])
+        
+        bin_state_features = [new_cols.get(feat_name, 0.0) for feat_name in self.bin_feature_names]
+        return bin_state_features
 
     def _update_state(self, action):
         """
@@ -507,34 +561,17 @@ class OfflineEnv(BaseTelescope):
         self._field_id = field_id
         self._visited.append(field_id)
 
-        new_features = {}
-        new_features['ra'], new_features['dec'] = self.field2radec[field_id]
-        new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
-        new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=self._timestamp)
-        
-        cos_zenith = np.cos(90 * units.deg - new_features['el'])
-        new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
+        self._pointing_state_features = self._update_pointing_features(field_id=self._field_id, timestamp=self._timestamp, night_first_timestamp=self._night_first_timestamp, night_final_timestamp=self._night_final_timestamp)
 
-        new_features['sun_ra'], new_features['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=self._timestamp)
-        new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'], time=self._timestamp)
-        new_features['moon_ra'], new_features['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=self._timestamp)
-        new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'], time=self._timestamp)
-
-        if self._night_final_timestamp == self._night_first_timestamp:
-            new_features['time_fraction_since_start'] = 0
+        if self.include_bin_features:
+            self._bin_state_features = self._update_bin_features(timestamp=self._timestamp)
         else:
-            new_features['time_fraction_since_start'] = (self._timestamp - self._night_first_timestamp) / (self._night_final_timestamp - self._night_first_timestamp)
-        
-        for feat_name in self.base_pointing_feature_names:
-            if any(string in feat_name and 'bin' not in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
-                new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
-                new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
+            self._bin_state_features = []
 
-
-
-        self._state = np.array([new_features.get(feat, 0.0) for feat in self.state_feature_names], dtype=np.float32)
+        self._state = np.array(self._pointing_state_features + self._bin_state_features, dtype=np.float32)
+        # logger.info(f'SELF._STATE: {len(self._pointing_state_features), len(self._bin_state_features), len(self.state_feature_names)}')
         self._update_action_mask(action, self._timestamp)
-        
+
     def _get_state(self):
         """Converts the current internal state into the formal observation format.
 
@@ -590,7 +627,7 @@ class OfflineEnv(BaseTelescope):
         if self.hpGrid.is_azel:
             self._action_mask = self._get_azel_action_mask(time)
         if not self.hpGrid.is_azel:
-            self._update_radec_action_mask(action, time)
+            self._action_mask = self._get_radec_action_mask(action, time)
 
     def _do_noncyclic_normalizations(self, state):
         """Performs z-score normalization on any non-periodic features, including bin-specific features"""

@@ -92,17 +92,17 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--lr_scheduler', type=str, default=None, help='cosine_annealing or None')
     parser.add_argument('--lr_scheduler_num_epochs', type=int, default=0, help='Number of epochs to reach min lr (must be less than num_epochs)')
-    parser.add_argument('--lr_scheduler_step_freq', type=int, default=100, help='The frequency (in units steps, not epoch) by which to step learning rate')
     parser.add_argument('--lr_scheduler_epoch_start', type=int, default=100, help='Epoch at which to start lr scheduler')
     parser.add_argument('--eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
     parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
-    parser.add_argument('--patience', type=int, default=50, help='Early stopping patience (in epochs). If 0, patience will not be used.')
+    parser.add_argument('--patience', type=int, default=0, help='Early stopping patience (in epochs). If 0, patience will not be used.')
     
     # Algorithm setup
     parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (ddqn or behavior_cloning)')
     parser.add_argument('--loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
     parser.add_argument('--tau', type=float, default=0.005, help='Target network update rate for DDQN')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor for DDQN')
+    parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
 
     
     # Parse arguments
@@ -160,7 +160,7 @@ def main():
         'calculate_action_mask': 'dqn' in args.algorithm_name
     }
     
-    logger.info(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')
+    logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')
 
     logger.info("Processing raw data into OfflineDataset()...")
     train_dataset = OfflineDECamDataset(
@@ -171,6 +171,8 @@ def main():
         **OFFLINE_DATASET_CONFIG
         )
     logger.info("Finished constructing train_dataset")
+
+    assert args.batch_size 
     
     # Plot bin membership for fields in ra vs dec
     colors = [f'C{i}' for i in range(7)]
@@ -213,14 +215,17 @@ def main():
     # Initialize algorithm and agent
     logger.info("Initializing agent...")
 
-    steps_per_epoch = int(len(trainloader.dataset) // args.batch_size)
-    num_lr_scheduler_steps = int(args.lr_scheduler_num_epochs * steps_per_epoch // args.lr_scheduler_step_freq)
+    steps_per_epoch = np.max([int(len(trainloader.dataset) // args.batch_size), 1])
+    logger.debug(f'{len(trainloader.dataset)} // {args.batch_size}')
+    num_lr_scheduler_steps = np.max([1, int(args.lr_scheduler_num_epochs * steps_per_epoch)])
+    logger.debug(f'lr_scheduler_num_epochs {args.lr_scheduler_num_epochs} * {steps_per_epoch}')
     lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': args.eta_min} if args.lr_scheduler == 'cosine_annealing' else {}
+    logger.debug(f'lr_scheduler_kwargs {lr_scheduler_kwargs}')
 
     algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=args.algorithm_name, obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, \
                                 loss_fxn=args.loss_function, hidden_dim=args.hidden_dim, lr=args.lr, lr_scheduler=args.lr_scheduler, device=device, \
-                                lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_step_freq=args.lr_scheduler_step_freq, lr_scheduler_epoch_start=args.lr_scheduler_epoch_start, \
-                                lr_scheduler_num_epochs=args.lr_scheduler_num_epochs, gamma=args.gamma, tau=args.tau)
+                                lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=args.lr_scheduler_epoch_start, \
+                                lr_scheduler_num_epochs=args.lr_scheduler_num_epochs, gamma=args.gamma, tau=args.tau, activation=args.activation)
 
     agent = Agent(
         algorithm=algorithm,

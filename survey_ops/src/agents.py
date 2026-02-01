@@ -105,7 +105,7 @@ class Agent:
 
         if trainloader is not None:
             dataset_size = len(trainloader.dataset)
-            steps_per_epoch = dataset_size // batch_size
+            steps_per_epoch = np.max([dataset_size // batch_size, 1])
             total_steps = int(num_epochs * steps_per_epoch) # ie, total number of times dataset is sampled
             loader_iter = iter(trainloader)  # create iterator
         else:
@@ -118,9 +118,6 @@ class Agent:
         patience_cur = patience
         use_patience = patience != 0
         i_epoch = 0
-
-        steps_per_epoch = len(trainloader.dataset) // batch_size
-        total_steps = int(num_epochs * steps_per_epoch)
 
         # total_lr_scheduler_steps = int(args.lr_scheduler_max_epochs * iterations_per_epoch // args.lr_scheduler_step_freq)
         logger.info(f"Total number of training steps: {total_steps}")
@@ -190,23 +187,23 @@ class Agent:
 
                         val_loss_cur = val_metrics['val_loss'][-1]
 
-                    if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
-                        best_val_loss = val_loss_cur
-                        patience_cur = patience
-                        logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
-                        self.save(save_filepath)
-                        with open(train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(train_metrics, handle)
-                        with open(val_metrics_filepath, 'wb') as handle:
-                            pickle.dump(val_metrics, handle)
-                        with open(val_train_metrics_filepath, 'wb') as handle:
-                            pickle.dump(val_train_metrics, handle)
-                    elif use_patience:
-                        patience_cur -= 1
-                        logger.debug(f"Patience left: {patience_cur}")
-                        if patience_cur == 0:
-                            logger.info("No patience left. Ending training.")
-                            break
+                        if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
+                            best_val_loss = val_loss_cur
+                            patience_cur = patience
+                            logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
+                            self.save(save_filepath)
+                            with open(train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(train_metrics, handle)
+                            with open(val_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_metrics, handle)
+                            with open(val_train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_train_metrics, handle)
+                        elif use_patience:
+                            patience_cur -= 1
+                            logger.debug(f"Patience left: {patience_cur}")
+                            if patience_cur == 0:
+                                logger.info("No patience left. Ending training.")
+                                break
 
         with open(train_metrics_filepath, 'wb') as handle:
             pickle.dump(train_metrics, handle)
@@ -384,16 +381,3 @@ class Agent:
         elif field_choice_method == 'random':
             field_id = random.choice(field_ids_in_bin)
             return field_id
-        
-
-    #         lon_data = hpGrid.lon
-            # lat_data = hpGrid.lat
-            # q_interpolated = interpolate_on_sphere(az, el, lon_data, lat_data, q_vals)
-            
-            # with torch.no_grad():
-            #     obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
-            #     mask = mask.to(self.device, dtype=torch.bool).unsqueeze(0)
-            #     action_logits = self.policy_net(obs)
-            #     # mask invalid actions
-            #     action_logits[~mask] = float('-inf')
-            #     action = torch.argmax(action_logits, dim=1)

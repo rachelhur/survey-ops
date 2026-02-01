@@ -26,7 +26,18 @@ class AlgorithmBase:
     def load(self, filepath):
         checkpoint = torch.load(filepath, map_location=self.device)
         self.policy_net.load_state_dict(checkpoint['policy_net'])
-    
+
+    def _initialize_scheduler(self, lr_scheduler, lr_scheduler_kwargs, optimizer):
+        if lr_scheduler is None:
+            return None
+        
+        if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
+            assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, **lr_scheduler_kwargs) 
+        else:
+            raise NotImplementedError
+        return lr_scheduler
+
 class DDQN(AlgorithmBase):
     """
     Implementation of the DDQN algorithm. Uses AdamW optimizer and, optionally, a cosine annealing lr scheduler.
@@ -45,33 +56,41 @@ class DDQN(AlgorithmBase):
     optimizer_kwargs (optional): 
     """
 
-    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, target_update_freq=1000, loss_fxn=None, use_double=True, \
-                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={}, lr_scheduler_step_freq=100):
+    def __init__(self, obs_dim, num_actions, hidden_dim, gamma, tau, device, lr, activation=None, target_update_freq=1000, loss_fxn=None, use_double=True, \
+                 lr_scheduler='cosine_annealing', lr_scheduler_kwargs=None, optimizer_kwargs={},
+                 lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5):
         super().__init__()
-        self.name = 'DDQN'
+
+        assert loss_fxn is not None, "loss_fxn needs to be passed"
+        self.loss_fxn = loss_fxn
+        if use_double:
+            self.name = 'DDQN'
+        else:
+            self.name = 'DQN'
+        
         self.gamma = gamma
         self.tau = tau
         self.device = device
 
-        self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
-        self.target_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
+        self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.target_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.use_double = use_double
         self.target_update_freq = target_update_freq
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=False, **optimizer_kwargs)
+        self.lr_scheduler = self._initialize_scheduler(lr_scheduler=lr_scheduler, lr_scheduler_kwargs=lr_scheduler_kwargs, optimizer=self.optimizer)
 
-        if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
-            assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
-        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
-        if self.lr_scheduler is not None:
-            self.lr_scheduler_step_freq = lr_scheduler_step_freq
-        # Tmax needs to equal number of scheduler steps at end of training
+        if lr_scheduler is not None:
+            logger.debug(f'lr_scheduler is {self.lr_scheduler}')
+            self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
+            self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
+
         assert loss_fxn is not None
         self.loss_fxn = loss_fxn
-        self.val_metrics = ['val_loss', 'q_policy', 'q_data', 'val_accuracy']
-
-    def train_step(self, batch, step_num):
+        self.val_metrics = ['val_loss', 'td_error', 'q_std', 'q_policy', 'q_expert', 'accuracy', 'total_grad_norm']
+        
+    def train_step(self, batch, epoch_num, step_num):
         state, actions, rewards, next_state, dones, action_masks = batch
 
         state = torch.as_tensor(state, device=self.device, dtype=torch.float32)
@@ -93,13 +112,13 @@ class DDQN(AlgorithmBase):
         with torch.no_grad():
             if self.use_double:
                 # Select best action with policy net
-                pol_next_q = self.policy_net(next_state)
-                pol_next_q[~action_masks] = float('-inf') #-1e9
-                pol_next_actions = pol_next_q.argmax(1).type(torch.long)
+                pol_q_next = self.policy_net(next_state)
+                pol_q_next[~action_masks] = float('-inf') #-1e9
+                pol_next_actions = pol_q_next.argmax(1).type(torch.long)
 
                 # Evaluate policy's next actions using target net
                 target_next_q = self.target_net(next_state)
-                next_q_targ = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze()
+                next_q_targ = target_next_q.gather(1, pol_next_actions.unsqueeze(1)).squeeze(1)
 
                 td_target = rewards + self.gamma * (1 - dones) * next_q_targ
             else:
@@ -114,17 +133,16 @@ class DDQN(AlgorithmBase):
         # optimize w/ backprop
         self.optimizer.zero_grad()
         loss.backward()
-        # Debugging nans in gradient
-        # for name, param in self.policy_net.named_parameters():
-        #     if param.grad is not None:
-        #         if torch.isnan(param.grad).any():
-        #             logger.debug(f"NaN gradient in {name}")
-        # print(f"Max Gradient Norm: {prev_grad_norm.item()}")
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
-        self.optimizer.step()
-        if self.lr_scheduler is not None and step_num % self.lr_scheduler_step_freq == 0:
-            self.lr_scheduler.step()
         
+        self.optimizer.step()
+        do_lr_scheduler_step = (self.lr_scheduler is not None
+                                and epoch_num >= self.lr_scheduler_epoch_start
+                                and epoch_num <= self.lr_scheduler_num_epochs + self.lr_scheduler_epoch_start
+        )
+        if do_lr_scheduler_step:
+            self.lr_scheduler.step()
+
         if step_num % self.target_update_freq == 0:
             self._soft_update()
 
@@ -145,7 +163,9 @@ class DDQN(AlgorithmBase):
 
         # greedy selection from policy
         with torch.no_grad():
-            obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+            obs = torch.tensor(obs, dtype=torch.float32, device=self.device)
+            if obs.dim() == 1:
+                obs = obs.unsqueeze(0)
             q_values = self.policy_net(obs).squeeze(0)
             # mask invalid actions
             action_mask = torch.tensor(action_mask, device=self.device, dtype=torch.bool)
@@ -189,33 +209,36 @@ class DDQN(AlgorithmBase):
             # Compute TD error/loss
             loss = self.loss_fxn(q_current, td_target)
 
+            # Compute metrics
+            td_error_mean = (q_current - td_target).abs().mean()
             mean_accuracy = (predicted_actions == actions).float().mean()
-
             q_dataset_mean = q_vals.gather(1, actions.unsqueeze(1) if actions.dim() == 1 else actions).squeeze().mean()
             q_policy_mean = q_vals.max(dim=1)[0].mean()
+            q_std = q_vals.std()
+            total_norm = torch.norm(torch.stack([
+                p.grad.norm() for p in self.policy_net.parameters()
+                if p.grad is not None
+            ]))
             
 
-            return loss, q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item()
+            return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), total_norm.item()
             
 class BehaviorCloning(AlgorithmBase):
-    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
-                 lr_scheduler_step_freq=10, lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu'):
-        self.name = 'BehaviorCloning'
-        self.device = device
-        self.policy_net = DQN(obs_dim, num_actions, hidden_dim).to(device)
-        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
-
+    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
+                    lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu'):
+        super().__init__()
+        
         assert loss_fxn is not None, "loss_fxn needs to be passed"
         self.loss_fxn = loss_fxn
-        
-        if lr_scheduler == 'cosine_annealing' or lr_scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
-            assert lr_scheduler_kwargs is not None, "Cosine annealing lr scheduler requires T_max and eta_min kwargs"
 
-        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **lr_scheduler_kwargs) if lr_scheduler == 'cosine_annealing' else None
+        self.name = 'BehaviorCloning'
+        self.device = device
+        self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.lr_scheduler = self._initialize_scheduler(lr_scheduler, lr_scheduler_kwargs, self.optimizer)    
 
         if lr_scheduler is not None:
-            logger.debug(f'BC lr_scheduler is {self.lr_scheduler}')
-            self.lr_scheduler_step_freq = lr_scheduler_step_freq
+            logger.debug(f'lr_scheduler is {self.lr_scheduler}')
             self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
             self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
 
@@ -246,12 +269,10 @@ class BehaviorCloning(AlgorithmBase):
         loss.backward()
         self.optimizer.step()
         do_lr_scheduler_step = (self.lr_scheduler is not None
-                                and step_num % self.lr_scheduler_step_freq == 0
                                 and epoch_num >= self.lr_scheduler_epoch_start
-                                and epoch_num <= self.lr_scheduler_num_epochs
+                                and epoch_num <= self.lr_scheduler_num_epochs + self.lr_scheduler_epoch_start
         )
         if do_lr_scheduler_step:
-        # if self.lr_scheduler is not None and step_num % self.lr_scheduler_step_freq == 0 and self.lr_scheduler and step_num >= self.lr_scheduler_start:
             self.lr_scheduler.step()
 
         return loss.item(), None

@@ -13,12 +13,21 @@ import fitsio
 from survey_ops.src.offline_dataset import OfflineDECamDataset
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 
 def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
-                    lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_step_freq=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None):
-    
+                    lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None, activation=None, 
+                    use_double=None):
+    assert loss_fxn is not None
+    if activation == 'relu':
+        activation = F.relu
+    elif activation == 'mish':
+        activation = F.mish
+    elif activation == 'swish':
+        activation = F.silu
+        
     # Set up model hyperparameters that are algorithm independent
     model_hyperparams = {
         'obs_dim': obs_dim,
@@ -27,24 +36,26 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
         'lr': lr,
         'lr_scheduler': lr_scheduler,
         'lr_scheduler_kwargs': lr_scheduler_kwargs,
-        'lr_scheduler_step_freq': lr_scheduler_step_freq,
         'lr_scheduler_epoch_start': lr_scheduler_epoch_start,
         'lr_scheduler_num_epochs': lr_scheduler_num_epochs,
+        'loss_fxn': loss_fxn,
+        'activation': activation
     }
         
     if algorithm_name == 'ddqn' or algorithm_name == 'dqn':
         assert gamma is not None, "Gamma (discount factor) must be specified for DDQN."
         assert tau is not None, "Tau (target network update rate) must be specified for DDQN."
         # assert loss_fxn in ['mse', 'huber'], "DDQN only supports mse or huber loss functions."
-
+        
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
         elif loss_fxn == 'mse':
             loss_fxn = nn.MSELoss(reduction='mean')
         elif loss_fxn == 'huber':
-            loss_fxn = nn.HuberLoss()
+            loss_fxn = nn.HuberLoss(reduction='mean')
         else:
-            raise NotImplementedError
+            print(loss_fxn)
+            raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
 
         model_hyperparams .update( {
             'gamma': gamma,
@@ -59,7 +70,6 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
         )
 
     elif algorithm_name == 'behavior_cloning':
-        # assert loss_fxn in ['cross_entropy', 'mse'], "Behavior Cloning only supports cross_entropy or mse loss functions."
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
         elif loss_fxn == 'cross_entropy':
@@ -68,8 +78,8 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
             loss_fxn = nn.MSELoss(reduction='mean')
         else:
             print(loss_fxn)
-            raise NotImplementedError
-
+            raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
+        
         model_hyperparams.update({
         'loss_fxn': loss_fxn
         })
@@ -87,10 +97,15 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
     return algorithm
 
 
-def setup_logger(save_dir, logging_filename):
+def setup_logger(save_dir, logging_filename, logging_level='debug'):
     # Create logger
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    if logging_level == 'debug':
+        logger.setLevel(logging.DEBUG)
+    elif logging_level == 'info':
+        logger.setLevel(logging.INFO)
+    else:
+        raise NotImplementedError
 
     # Avoid duplicate handlers if called twice
     if logger.handlers:

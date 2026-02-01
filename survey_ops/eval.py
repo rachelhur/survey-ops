@@ -23,81 +23,127 @@ from survey_ops.utils.pytorch_utils import seed_everything
 from survey_ops.utils.script_utils import setup_algorithm, setup_logger, get_device, load_raw_data_to_dataframe
 from survey_ops.src.environments import OfflineEnv
 from survey_ops.src.offline_dataset import OfflineDECamDataset
+import logging
+logger = logging.getLogger(__name__)
 
 import argparse
 
-def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None, is_azel=False):
+def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None, is_azel=False, whole=False):
     # Save timestamps, field_ids, and bin numbers
     bin_space = 'azel' if is_azel else 'radec'
-    
-    _timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}'] \
-                if len(eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']) > len(pd_group['timestamp']) \
-                else pd_group['timestamp']
-    
-    eval_field_schedule = {
-        'time': _timestamps,
-        'field_id': eval_metrics['ep-0']['field_id'][f'night-{night_idx}']
-    }
-    
-    expert_field_schedule = {
-        'time': _timestamps,
-        'field_id': pd_group['field_id'].values
-    }
-    
-    bin_schedule = {
-        'time': _timestamps,
-        'policy_bin_id': eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(np.int32),
-        'bin_id': pd_group['bin'].values
-    }
-    
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    for data, filename in zip(
-        [expert_field_schedule, eval_field_schedule, bin_schedule],
-        ['expert_field_schedule.csv', 'new_field_schedule.csv', 'bin_schedule.csv']
-        ):
-        series_data = {key: pd.Series(value) for key, value in data.items()}
-        _df = pd.DataFrame(series_data)
-        if 'bin' in filename:
-            _df['policy_bin_id'] = _df['policy_bin_id'].fillna(0).astype('Int64')
-            _df['bin_id'] = _df['bin_id'].fillna(0).astype('Int64')
-        output_filepath = save_dir + filename
-        with open(output_filepath, 'w') as f:
-            _df.to_csv(f, index=False)
-        
-        if make_gif:
-            if 'bin' in filename:
-                create_gif(
-                    bin_schedule_filepath=output_filepath, 
-                    id2pos_filepath=f'../data/nside{nside}_bin2{bin_space}.json',
-                    outdir=save_dir,
-                    nside=nside
-                    )
-            elif 'expert_field' in filename:
-                continue
-                raise NotImplementedError
-            elif 'new_field' in filename:
-                continue
-                raise NotImplementedError
+    bin2pos_filepath = f'../data/nside{nside}_bin2{bin_space}.json'
+    field2radec_filepath = f'../data/field2radec.json'
+    with open(bin2pos_filepath) as f:
+        bin2pos = json.load(f)
+    with open(field2radec_filepath) as f:
+        field2radec = json.load(f)
 
-def create_gif(bin_schedule_filepath, id2pos_filepath, outdir, nside=None, plot_bins=True):
-    schedule = pd.read_csv(bin_schedule_filepath)
-    with open(id2pos_filepath) as f:
-        id2pos = json.load(f)
-    print(outdir)
-    if plot_bins:
-        plot_bins_movie(
-            outfile=outdir + 'bin_schedule.gif',
-            nside=nside,
-            times=schedule["time"].values,
-            idxs=schedule["bin_id"].values,
-            alternate_idxs=schedule["policy_bin_id"].values,
-            sky_bin_mapping=id2pos,
-        )
-    else:
+    eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
+    expert_timestamps = pd_group['timestamp'].values
+    
+    _timestamps = eval_timestamps if len(eval_timestamps) > len(expert_timestamps) else expert_timestamps
+    
+    schedule_full = {
+        'agent_timestamp': eval_timestamps,
+        'agent_field_id': eval_metrics['ep-0']['field_id'][f'night-{night_idx}'],
+        'agent_bin_id': eval_metrics['ep-0']['bin'][f'night-{night_idx}'],
+        'expert_timestamp': expert_timestamps,
+        'expert_field_id': pd_group['field_id'].values,
+        'expert_bin_id': pd_group['bin'].values,
+        'timestamp': _timestamps
+    }
+
+    df = pd.DataFrame(data={k: pd.Series(v) for k, v in schedule_full.items()}).fillna(0).astype(int)
+
+    output_filepath = save_dir + 'schedule.csv'
+    df.to_csv(output_filepath, index=False)
+
+    schedule = pd.read_csv(output_filepath)
+
+    # Create fields movies
+    plot_fields_movie(
+        outfile=save_dir + 'expert_field_schedule.gif',
+        times=schedule['expert_timestamp'],
+        field_pos=np.array([field2radec.get(str(fid), [None, None]) for fid in schedule['expert_field_id'].values])
+    )
+    plot_fields_movie(
+        outfile=save_dir + 'agent_field_schedule.gif',
+        times=schedule['agent_timestamp'],
+        field_pos=np.array([field2radec.get(str(fid), [None, None]) for fid in schedule['agent_field_id'].values])
+    )
+
+    # Create bin movie comparison       
+    plot_bins_movie(
+        outfile=save_dir + 'bin_comparison_schedule.gif',
+        nside=nside,
+        times=schedule['expert_timestamp'].values,
+        idxs=schedule['expert_bin_id'].values,
+        alternate_idxs=schedule['agent_bin_id'].values,
+        sky_bin_mapping=bin2pos,
+    )
+    plot_bins_movie(
+        outfile=save_dir + 'expert_bin_schedule.gif',
+        nside=nside,
+        times=schedule['expert_timestamp'].values,
+        idxs=schedule['expert_bin_id'].values,
+        sky_bin_mapping=bin2pos,
+    )
+    plot_bins_movie(
+        outfile=save_dir + 'agent_bin_schedule.gif',
+        nside=nside,
+        times=schedule['agent_timestamp'].values,
+        idxs=schedule['agent_bin_id'].values,
+        sky_bin_mapping=bin2pos,
+    )
+
+    # Mollefield
+    plot_schedule_whole(
+        outfile=save_dir + 'mollweide.png',
+        times=schedule['timestamp'].values,
+        field_pos=None,
+        bin_idxs=schedule['expert_bin_id'].values,
+        alternate_bin_idxs=schedule['agent_bin_id'].values,
+        nside=nside,
+        sky_bin_mapping=bin2pos,
+        projection="mollweide",
+        center_pos=(None, None),
+    )
+    
+    plot_schedule_whole(
+        outfile=save_dir + 'ortho.png',
+        times=schedule['timestamp'].values,
+        field_pos=None,
+        bin_idxs=schedule['expert_bin_id'].values,
+        alternate_bin_idxs=schedule['agent_bin_id'].values,
+        nside=nside,
+        sky_bin_mapping=bin2pos,
+        projection="ortho",
+        center_pos=(None, None),
+    )
+
+def create_gif(outfile, plot_type, times, nside=None, idxs=None, alt_idxs=None, bin2pos=None, whole=False, field2radec=None, field_idxs=None):
+    if whole:
         raise NotImplementedError
+    if plot_type=='bin':
+        plot_bins_movie(
+            outfile=outfile,
+            nside=nside,
+            times=times,
+            idxs=idxs,
+            alternate_idxs=alt_idxs,
+            sky_bin_mapping=bin2pos,
 
+        )
+    elif plot_type=='field':
+        field_pos = np.array([field2radec.get(str(fid), [None, None]) for fid in idxs])
+        plot_fields_movie(
+            outfile=outfile,
+            times=times,
+            field_pos=field_pos
+        )
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -113,6 +159,7 @@ def main():
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the test dataset')
     parser.add_argument('--specific_months', type=int, nargs='*', default=None, help='Specific months to include in the test dataset')
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the test dataset')
+    parser.add_argument('--logging_level', type=str, default='info', help='Logging level. Options: info, debug')
 
     # Evaluation hyperparameters
     parser.add_argument('--num_episodes', type=int, default=1, help='Number of evaluation episodes to run')
@@ -127,7 +174,7 @@ def main():
         os.makedirs(results_outdir)
 
     # Set up logging
-    logger = setup_logger(save_dir=results_outdir, logging_filename='eval.log')
+    logger = setup_logger(save_dir=results_outdir, logging_filename='eval.log', logging_level=args.logging_level)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.getLogger("pytorch").setLevel(logging.WARNING)
     logging.getLogger("numpy").setLevel(logging.WARNING)
@@ -229,6 +276,7 @@ def main():
         # Get date in string form for plots
         date = night_name.date()
         date_str = f"{date.year}-{date.month}-{date.day}"
+        logger.info(f'Drawing plots for night {date_str}')
         subdir_path = results_outdir + date_str + '/'
         if not os.path.exists(subdir_path):
             os.makedirs(subdir_path)
@@ -244,40 +292,16 @@ def main():
         axb.legend()
         axb.set_ylabel('bin')
 
-        # Plot bins vs step
-        # fig_b, axs_b = plt.subplots(2, figsize=(10,7), sharex=True)
-        # axs_b[0].plot(eval_metrics[f'ep-{ep_num}']['timestamp'][f'night-{night_idx}'],
-        #               eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'],
-        #               marker='o', label='pred', alpha=.5)
-        # axs_b[0].plot(night_group['timestamp'],
-        #               night_group['bin'].values.astype(int),
-        #               marker='o', label='true', alpha=.5)
-        # axs_b[0].legend()
-        # axs_b[0].set_ylabel('bin')
-        # axs_b[1].plot(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'][:len(night_group['bin'].values.astype(int))] \
-                    # - night_group['bin'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'])])
-        # axs_b[1].set_ylabel('bin' + '\n (residuals)')
         fig_b.suptitle(date_str)
         fig_b.savefig(subdir_path + f'bin_vs_step.png')
         plt.close()
         
-        # # Plot fields vs step
-        # fig_f, axs_f = plt.subplots(2, figsize=(10,7), sharex=True)
-        # axs_f[0].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'], marker='o', label='pred', alpha=.5)
-        # axs_f[0].plot(night_group['field_id'].values.astype(int), marker='o', label='true', alpha=.5)
-        # axs_f[0].legend()
-        # axs_f[0].set_ylabel('field_id')
-        # axs_f[1].plot(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'][:len(night_group['field_id'].values.astype(int))] \
-        #             - night_group['field_id'].values.astype(int)[:len(eval_metrics[f'ep-{ep_num}']['field_id'][f'night-{night_idx}'])])
-        # axs_f[1].set_ylabel('field_id' + '\n (residuals)')
-        # fig_f.suptitle(date_str)
-        # fig_f.savefig(subdir_path  + f'field_id_vs_step.png')
         plt.close()
 
         # Plot state features vs timestamp for first episode
-        fig, axs = plt.subplots(len(test_dataset.state_feature_names), figsize=(10, len(test_dataset.state_feature_names)*5))
-        for i, feature_row in enumerate(eval_metrics['ep-0']['observations'][f'night-{night_idx}'].T):
-            feat_name = env.unwrapped.test_dataset.state_feature_names[i]
+        fig, axs = plt.subplots(len(test_dataset.pointing_feature_names), figsize=(10, len(test_dataset.pointing_feature_names)*5))
+        for i, feature_row in enumerate(eval_metrics['ep-0']['observations'][f'night-{night_idx}'].T[:len(test_dataset.pointing_feature_names)]):
+            feat_name = env.unwrapped.test_dataset.pointing_feature_names[i]
             eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
             eval_data = feature_row.copy()
             if feat_name == 'airmass':
@@ -299,8 +323,8 @@ def main():
         
         eval_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
         orig_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
+        
         if len(orig_field_radecs) != 1:
-            
             # Plot bins
             fig, axs = plt.subplots(1, 2, figsize=(10,5), sharex=True, sharey=True)
             axs[0].scatter(orig_bin_radecs[:, 0], orig_bin_radecs[:, 1], label='orig schedule', cmap='Reds', c=np.arange(len(orig_bin_radecs)))
@@ -326,21 +350,20 @@ def main():
             plt.close()
 
         logger.info(f'Creating schedule gif for {night_idx}th night')
-        save_field_and_bin_schedules(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gif=False, is_azel=test_dataset.hpGrid.is_azel)
+        save_field_and_bin_schedules(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gif=True, is_azel=test_dataset.hpGrid.is_azel)
         
-        from survey_ops.plotting import run_plotting
-        # Plot bins
-        run_plotting(
-            outfile=subdir_path + "bin_schedule.gif",
-            schedule=subdir_path + "bin_schedule.csv",
-            plot_type="bin",
-            bins=f"../data/nside16_bin2{bin_space}.json",
-            fields=None,
-            nside=nside,
-            compare=True,
-            policy=False,
-            is_azel=test_dataset.hpGrid.is_azel
-            )
+        # # Plot bins
+        # run_plotting(
+        #     outfile=subdir_path + "bin_schedule.gif",
+        #     schedule=subdir_path + "bin_schedule.csv",
+        #     plot_type="bin",
+        #     bins=f"../data/nside16_bin2{bin_space}.json",
+        #     fields=None,
+        #     nside=nside,
+        #     compare=True,
+        #     policy=False,
+        #     is_azel=test_dataset.hpGrid.is_azel
+        #     )
         
         # Plot fields
 

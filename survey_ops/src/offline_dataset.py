@@ -72,7 +72,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
-        self.bin2coord = {int(i): (lon, lat) for i, (lon, lat) in zip(self.hpGrid.heal_idx, zip(self.hpGrid.lon, self.hpGrid.lat))}
+        self.bin2coord = {int(i): (lon, lat) for i, (lon, lat) in enumerate(zip(self.hpGrid.lon, self.hpGrid.lat))}
         
         # Save list of all feature names
         self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names =\
@@ -105,7 +105,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.get_fields_in_bin = get_fields_in_radec_bin
 
         # Process dataframe to add columns for pointing features
-        df = self._process_dataframe(df, self.pointing_feature_names, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
+        df = self._process_dataframe(df, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
         self._df = df # Save for diagnostics
 
         # Set dataset-wide (across observation nights) attributes
@@ -317,7 +317,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         df = df[~nights_to_remove_mask]
         return df
 
-    def _process_dataframe(self, df, pointing_feature_names, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
+    def _process_dataframe(self, df, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
         """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
         df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
@@ -331,13 +331,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df = df[df['night'].dt.day.isin(specific_days)]
         if specific_filters is not None:
             df = df[df['filter'].isin(specific_filters)]
-
-        # Remove specific nights according to object name
-        df = self._remove_specific_nights(objects_to_remove=self.objects_to_remove, df=df)
-
+        
         # Remove observations in 1970 - what are these?
         df = df[df['night'].dt.year != 1970]
         assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
+
+        # Remove specific nights according to object name
+        df = self._remove_specific_nights(objects_to_remove=self.objects_to_remove, df=df)
         
         # Some fields are mis-labelled - add '(outlier)' to these object names so that they are treated as separate fields
         df = self._relabel_mislabelled_objects(df)
@@ -529,10 +529,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
     def _construct_rewards(self, df):
         """Constructs rewards for all transitions. Reward is defined as teff, normalized to [0, 1]."""
-        teff_no_zen = df.groupby('night').tail(-1)[['teff']].values[:, 0]
-        min_teff = np.min(teff_no_zen)
-        max_teff = np.max(teff_no_zen)
-        rewards = (teff_no_zen - min_teff)/max_teff
+        teff_no_zen = df[df['object'] != 'zenith'][['teff']].values[:, 0]
+        t_diff = df.sort_values(['night', 'timestamp']).groupby('night')['timestamp'].diff().dropna().to_numpy()
+        teff_inst_rate = teff_no_zen / t_diff
+        min_rate = np.min(teff_inst_rate)
+        max_rate = np.max(teff_inst_rate)
+        rewards = (teff_inst_rate - min_rate)/max_rate
         return rewards
 
     def _construct_action_masks(self, timestamps, num_transitions):
@@ -621,16 +623,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     zenith_df[f'{feat_name}_sin'] = np.sin(zenith_df[feat_name].values)
 
         return zenith_df
-    
-    # def _get_fields_in_azel_bin(self, bin_num, timestamp):
-    #     incomplete_fields_mask = np.array([self._visited.count(fid) < self.field2nvisits[fid] for fid in self.field_ids])
-    #     fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=timestamp)
-    #     field_bins = self.hpGrid.ang2idx(lon=fields_az, lat=fields_el)
-    #     fields_in_bin = self.field_ids[field_bins == bin_num and incomplete_fields_mask]
-    #     return fields_in_bin
-    
-    # def _get_fields_in_radec_bin(self, bin_num, timestamp=None):
-    #     return self.bin2fields_in_bin.get(bin_num)
 
     def get_dataloader(self, batch_size, num_workers, pin_memory, random_seed, drop_last=True, val_split=.1, return_train_and_val=True):
         generator = torch.Generator().manual_seed(random_seed)
