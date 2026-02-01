@@ -39,24 +39,6 @@ def exponential_schedule(eps_start: float, eps_end: float, decay_rate: float, t:
 
 class DQN(nn.Module):
     """Deep Q-Network mapping observations to action-values.
-
-    This network implements a simple 3-layer MLP used to approximate the
-    Q-function Q(s, a). It takes an observation vector as input and outputs a
-    vector of Q-values - one for each discrete action.
-
-    Architecture:
-        Input → Linear → Activation → Linear → Activation → Linear → Q-values
-
-    Attributes:
-        activation (callable):
-            Nonlinearity applied after the first two linear layers.
-            Defaults to ReLU if not provided.
-        layer1 (nn.Linear):
-            First fully connected layer.
-        layer2 (nn.Linear):
-            Second fully connected layer.
-        layer3 (nn.Linear):
-            Output layer producing Q-values for all actions.
     """
     def __init__(self, observation_dim, action_dim, hidden_dim=128, activation=None):
         super(DQN, self).__init__()
@@ -71,3 +53,36 @@ class DQN(nn.Module):
         x = self.activation(self.layer1(x))
         x = self.activation(self.layer2(x))
         return self.layer3(x)
+
+class BinEmbeddingDQN(nn.Module):
+    def __init__(self, num_bins, pointing_dim, dynamic_bin_feature_dim, hidden_dim, embedding_dim, activation=None):
+        super().__init__()
+        self.activation = F.relu if activation is None else activation 
+        
+        # Static bin positions — learned once, not fed through input
+        self.bin_embedding = nn.Embedding(num_bins, embedding_dim)
+        self.dqn = DQN(observation_dim=pointing_dim + embedding_dim + dynamic_bin_feature_dim, action_dim=1, hidden_dim=hidden_dim)
+                
+    # Single MLP scorer: takes (pointing_features, bin_embedding, dynamic_bin_features) → score
+        
+    def forward(self, pointing_features, dynamic_bin_features):
+        # pointing_features: (batch, pointing_dim)
+        # dynamic_bin_features: (batch, num_bins, dynamic_bin_feature_dim)
+        
+        batch_size = pointing_features.shape[0]
+        num_bins = self.bin_embedding.num_embeddings
+        
+        # Get bin embeddings: (batch, num_bins, embedding_dim)
+        bin_ids = torch.arange(num_bins, device=pointing_features.device)
+        bin_emb = self.bin_embedding(bin_ids).unsqueeze(0).expand(batch_size, -1, -1)
+        
+        # Broadcast pointing to all bins: (batch, num_bins, pointing_dim)
+        pointing_expanded = pointing_features.unsqueeze(1).expand(-1, num_bins, -1)
+        
+        # Concatenate everything: (batch, num_bins, pointing_dim + embedding_dim + dynamic_bin_feature_dim)
+        combined = torch.cat([pointing_expanded, bin_emb, dynamic_bin_features], dim=-1)
+        
+        # Score each bin: (batch, num_bins)
+        scores = self.scorer(combined).squeeze(-1)
+        
+        return scores
