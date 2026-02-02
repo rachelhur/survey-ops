@@ -78,7 +78,7 @@ def main():
     parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
 
     # Data selection and setup
-    parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or grid)')
+    parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or uniform)')
     parser.add_argument('--nside', type=int, default=16, help='Healpix nside parameter (only used if binning_method is healpix)')
     parser.add_argument('--bin_space', type=str, default='radec', help='Binning space to use (azel or radec)')
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the dataset')
@@ -86,7 +86,6 @@ def main():
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
     # parser.add_argument('--include_default_features', action='store_true', help='Whether to include default features in the dataset')
     parser.add_argument('--include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
-    # parser.add_argument('--do_z_score_norm', action='store_true', help='Whether to apply z-score normalization to the features')
     parser.add_argument('--do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
     parser.add_argument('--do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
     parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')

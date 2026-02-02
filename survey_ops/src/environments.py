@@ -9,6 +9,7 @@ from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
 from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.src.config_constants import *
 
 import logging
 logger = logging.getLogger(__name__)
@@ -247,23 +248,21 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, test_dataset, max_nights=None, exp_time=90., slew_time=30.):
+    def __init__(self, trained_model_dir=None, test_dataset=None, max_nights=None, exp_time=90., slew_time=30.):
         """
         Args
         ----
             dataset: An object (assumed to be OfflineDECamDataset instance) containing
                      static environment parameters and observation data.
         """
+        assert trained_model_dir is not None and test_dataset is not None, "Either trained_model_dir or test_dataset must be passed"
         # Instantiate static attributes
         self.test_dataset = test_dataset
         self.exp_time = exp_time
         self.slew_time = slew_time
         self.time_between_obs = exp_time + slew_time
-        self.time_dependent_feature_substrs = ['az', 'el', 'ha', 'time_fraction_since_start']
-        self.cyclical_feature_names = test_dataset.cyclical_feature_names
-        self.z_score_feature_names = test_dataset.z_score_feature_names
-        self.do_z_score_norm = test_dataset.do_z_score_norm
-        self.z_score_feature_names = test_dataset.z_score_feature_names
+        self.time_dependent_feature_substrs = TIME_DEPENDENT_FEATURE_SUBSTRS
+        self.cyclical_feature_names = CYCLICAL_FEATURE_NAMES
         self.do_cyclical_norm = test_dataset.do_cyclical_norm
         self.do_max_norm = test_dataset.do_max_norm
         self.max_norm_feature_names = test_dataset.max_norm_feature_names
@@ -297,10 +296,6 @@ class OfflineEnv(BaseTelescope):
         self.state_feature_names = test_dataset.state_feature_names
         self.pointing_feature_names = test_dataset.pointing_feature_names
         self.bin_feature_names = test_dataset.bin_feature_names
-
-        if self.do_z_score_norm:
-            self.zscore_means = test_dataset.means.detach().numpy()
-            self.zscore_stds = test_dataset.stds.detach().numpy()
 
         self.pointing_pd_nightgroup = test_dataset._df.groupby('night')
         if self.include_bin_features:
@@ -448,7 +443,6 @@ class OfflineEnv(BaseTelescope):
         self._timestamp = first_row_in_night_pointing['timestamp']
         self._visited.append(self._field_id)
 
-        # first_feature_state_in_night = self.test_dataset._get_pointing_features_from_row(row=first_row_in_night)
         self._pointing_state_features = [first_row_in_night_pointing[feat_name] for feat_name in self.pointing_feature_names]
         if self.include_bin_features:
             first_row_in_night_bin = self.bin_pd_nightgroup.head(1).iloc[self._night_idx]
@@ -646,12 +640,12 @@ class OfflineEnv(BaseTelescope):
             state[max_norm_mask] = state[max_norm_mask] / (np.pi/2)
 
         # z-score normalization for any non-periodic features
-        if self.do_z_score_norm:
-            z_score_mask = np.array([
-            any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-            for feat_name in self.state_feature_names
-            ])
-            state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
+        # if self.do_z_score_norm:
+        #     z_score_mask = np.array([
+        #     any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+        #     for feat_name in self.state_feature_names
+        #     ])
+        #     state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
         state[np.isnan(state)] = 10 # for airmass nan values -- only airmass should be high
 
         return state

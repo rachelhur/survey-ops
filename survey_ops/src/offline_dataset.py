@@ -48,19 +48,20 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 additional_bin_features=[],
                 include_default_features=True,
                 include_bin_features=True,
-                do_z_score_norm=False,
                 do_cyclical_norm=True,
                 do_max_norm=True,
                 do_inverse_airmass=True,
                 calculate_action_mask=True,
                 objects_to_remove: list = ['guide', 'DES vvds', 'J0', 'gwh', 'DESGW', 'Alhambra-8', 'cosmos', 'COSMOS hex', 'TMO', 'LDS', 'WD0', 'DES supernova hex', 'NGC', 'ec'],
-                remove_large_time_diffs=True
+                remove_large_time_diffs=True,
+                field2radec_filepath='../data/field2radec.json',
+                field2name_filepath = '../data/field2name.json',
+                field2nvisits_filepath = '../data/field2nvisits.json'
                 ):
-        assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
-        assert (binning_method == 'uniform_grid' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform_grid and nside must be specified for healpix'
+        assert binning_method in ['uniform', 'healpix'], 'bining_method must be uniform or healpix'
+        assert (binning_method == 'uniform' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform and nside must be specified for healpix'
 
         # Set up static attributes
-        self.do_z_score_norm = False #do_z_score_norm
         self.do_cyclical_norm = do_cyclical_norm
         self.do_max_norm = do_max_norm
         self.do_inverse_airmass = do_inverse_airmass
@@ -81,9 +82,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self._setup_feature_names(include_default_features, include_bin_features, additional_pointing_features, additional_bin_features)
         
         # Load all fields and nvisits that exist in entire offline dataset (even if not specified in specific_years, specific_months, specific_days)
-        field2radec_filepath = f'../data/field2radec.json'
-        field2name_filepath = f'../data/field2name.json'
-        field2nvisits_filepath = f'../data/field2nvisits.json'
         with open(field2radec_filepath, 'r') as f:
             self.field2radec = json.load(f)
         with open(field2name_filepath, 'r') as f:
@@ -95,23 +93,23 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
 
-        # Dynamically assign self.get_fields_in_bin -- fields in azel depend on time, fields in radec are static
-        if self.hpGrid.is_azel:
-           # If bins in azel, fields in bin depend on timestamp      
-            self.get_fields_in_bin = get_fields_in_azel_bin
-        else:
-            # If bins in radec, exists a static file with fields in bin for all times
-            bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
-            with open(bin2fields_in_bin_filepath, 'r') as f:
-                self.bin2fields_in_bin = json.load(f)
-            self.get_fields_in_bin = get_fields_in_radec_bin
+        # # Dynamically assign self.get_fields_in_bin -- fields in azel depend on time, fields in radec are static
+        # if self.hpGrid.is_azel:
+        #    # If bins in azel, fields in bin depend on timestamp      
+        #     self.get_fields_in_bin = get_fields_in_azel_bin
+        # else:
+        #     # If bins in radec, exists a static file with fields in bin for all times
+        #     bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
+        #     with open(bin2fields_in_bin_filepath, 'r') as f:
+        #         self.bin2fields_in_bin = json.load(f)
+        #     self.get_fields_in_bin = get_fields_in_radec_bin
 
         # Process dataframe to add columns for pointing features
         df = self._process_dataframe(df, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
         self._df = df # Save for diagnostics
 
         # Set dataset-wide (across observation nights) attributes
-        if binning_method == 'uniform_grid':
+        if binning_method == 'uniform':
             self.num_actions = int(num_bins_1d**2)
         elif binning_method == 'healpix':
             self.num_actions = len(self.hpGrid.lon)
@@ -155,7 +153,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             required_point_features = []
             required_bin_features = []
         else:
-            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'num_visits_tonight', 'time_fraction_since_start'] \
+            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start'] \
                                         if include_default_features else []
             required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon'] \
                                         if (include_default_features and include_bin_features) else []
@@ -232,31 +230,31 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.next_states[:, max_norm_mask] = self.next_states[:, max_norm_mask] / (np.pi/2)
 
         # z-score normalization for any non-periodic features
-        if self.do_z_score_norm:
-            logger.info("Performing z-score normalizations")
-            z_score_mask = torch.tensor(np.array([
-                any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-                for feat_name in self.state_feature_names
-                ], dtype=bool)
-                , dtype=torch.bool
-            )
+        # if self.do_z_score_norm:
+        #     logger.info("Performing z-score normalizations")
+        #     z_score_mask = torch.tensor(np.array([
+        #         any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
+        #         for feat_name in self.state_feature_names
+        #         ], dtype=bool)
+        #         , dtype=torch.bool
+        #     )
 
-            self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
-            self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
-            self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
-            self.next_states[torch.isnan(self.next_states)] = 10
+        #     self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
+        #     self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
+        #     self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
+        #     self.next_states[torch.isnan(self.next_states)] = 10
 
-            mask_zenith = self.states == 0 # need to find a way to mask zenith states
-            states = self.states.clone()
+        #     mask_zenith = self.states == 0 # need to find a way to mask zenith states
+        #     states = self.states.clone()
 
-            states[:, z_score_mask] = ((states[:, z_score_mask] - self.means) / self.stds)
-            states[mask_zenith] = 0.
-            states[torch.isnan(states)] = 10
-            self.states = states
-            raise NotImplementedError # see comment above about masking zenith states
-        else:
-            self.means = None
-            self.stds = None
+        #     states[:, z_score_mask] = ((states[:, z_score_mask] - self.means) / self.stds)
+        #     states[mask_zenith] = 0.
+        #     states[torch.isnan(states)] = 10
+        #     self.states = states
+        #     raise NotImplementedError # see comment above about masking zenith states
+        # else:
+        #     self.means = None
+        #     self.stds = None
 
     def _relabel_mislabelled_objects(self, df):
         """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
@@ -521,7 +519,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     
     def _construct_actions(self, df, next_states=None, bin_space='radec', binning_method='healpix', num_bins_1d=None, remove_large_time_diffs=False, next_state_idxs=None):
         assert bin_space in ['radec', 'azel'], 'bin_space must be radec or azel'
-        assert binning_method in ['uniform_grid', 'healpix'], 'bining_method must be uniform_grid or healpix'
+        assert binning_method in ['uniform', 'healpix'], 'bining_method must be uniform or healpix'
 
         if binning_method == 'healpix':
             if remove_large_time_diffs:
@@ -539,7 +537,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 indices = self.hpGrid.ang2idx(lon=lonlat_no_zen[:, 0], lat=lonlat_no_zen[:, 1])
             return indices
         
-        elif binning_method == 'uniform_grid' and bin_space == 'azel':
+        elif binning_method == 'uniform' and bin_space == 'azel':
             raise NotImplementedError
             az_edges = np.linspace(0, 360, num_bins_1d + 1, dtype=np.float32)
             # az_centers = az_edges[:-1] + (az_edges[1] - az_edges[0])/2
@@ -589,7 +587,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
                 self._els = els
                 action_mask = els > 0
-
             else:
                 action_mask = self.hpGrid.lat > 0
         else:

@@ -31,8 +31,7 @@ import argparse
 def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None, is_azel=False, whole=False):
     # Save timestamps, field_ids, and bin numbers
     bin_space = 'azel' if is_azel else 'radec'
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    assert os.path.exists(save_dir)
 
     bin2pos_filepath = f'../data/nside{nside}_bin2{bin_space}.json'
     field2radec_filepath = f'../data/field2radec.json'
