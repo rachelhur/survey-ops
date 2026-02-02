@@ -9,7 +9,10 @@ from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
 from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
-from survey_ops.src.config_constants import *
+from survey_ops.utils.config import Config
+from survey_ops.src.offline_dataset import setup_feature_names
+
+import json
 
 import logging
 logger = logging.getLogger(__name__)
@@ -248,68 +251,74 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, trained_model_dir=None, test_dataset=None, max_nights=None, exp_time=90., slew_time=30.):
+    def __init__(self, cfg, max_nights=None, exp_time=90., slew_time=30., pointing_pd_nightgroup=None, bin_pd_nightgroup=None):
         """
         Args
         ----
             dataset: An object (assumed to be OfflineDECamDataset instance) containing
                      static environment parameters and observation data.
         """
-        assert trained_model_dir is not None and test_dataset is not None, "Either trained_model_dir or test_dataset must be passed"
-        # Instantiate static attributes
-        self.test_dataset = test_dataset
+        assert cfg is not None, "Either cfg or test_dataset must be passed"
+        
+        # Assign static attributes
         self.exp_time = exp_time
         self.slew_time = slew_time
         self.time_between_obs = exp_time + slew_time
-        self.time_dependent_feature_substrs = TIME_DEPENDENT_FEATURE_SUBSTRS
-        self.cyclical_feature_names = CYCLICAL_FEATURE_NAMES
-        self.do_cyclical_norm = test_dataset.do_cyclical_norm
-        self.do_max_norm = test_dataset.do_max_norm
-        self.max_norm_feature_names = test_dataset.max_norm_feature_names
-        self.do_inverse_airmass = test_dataset.do_inverse_airmass
-        self.include_bin_features = len(test_dataset.bin_feature_names) > 0
+        self.time_dependent_feature_substrs = cfg.get('feature_names.TIME_DEPENDENT_FEATURE_NAMES')
+        self.cyclical_feature_names = cfg.get('feature_names.CYCLICAL_FEATURE_NAMES')
+        self.do_cyclical_norm = cfg.get('experiment.data.do_cyclical_norm')
+        self.do_max_norm = cfg.get('experiment.data.do_max_norm')
+        self.do_inverse_norm = cfg.get('experiment.data.do_inverse_norm')
+        self.max_norm_feature_names = cfg.get('feature_names.MAX_NORM_FEATURE_NAMES')
+        self.include_bin_features = cfg.get('experiment.data.include_bin_features')
+        self.bin_space = cfg.get('experiment.data.bin_space')
 
-        # Dataset-wide mappings
-        self.field2radec = test_dataset.field2radec
-        self.field_ids = test_dataset.field_ids
-        self.field_radecs = test_dataset.field_radecs
+        # Get other configurations
+        binning_method = cfg.get('experiment.data.binning_method')
+        nside = cfg.get('experiment.data.nside')
+
+        # Dataset-wide mappings        
+        with open(cfg.get('paths.FIELD2RADEC'), 'r') as f:
+            field2radec = json.load(f)
+        with open(cfg.get('paths.FIELD2NVISITS'), 'r') as f:
+            field2nvisits = json.load(f)
+        self.field2radec = {int(k): v for k, v in field2radec.items()}
+        self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
+        self.field_radecs = np.array(list(self.field2radec.values()))
+        
+        with open(cfg.get('paths.FIELD2NAME'), 'r') as f:
+            self.field2name = json.load(f)
+        
+        self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
+        self.nbins = len(self.hpGrid.lon)
 
         # Bin-space dependent function to get fields in bin
-        if not test_dataset.hpGrid.is_azel:
-            self.bin_space = 'radec'
-            self.bin2fields_in_bin = test_dataset.bin2fields_in_bin
-            self.get_fields_in_bin = get_fields_in_radec_bin
+        if not self.hpGrid.is_azel:
+            self.bin2fields_in_bin = cfg.get('paths.BIN2FIELDS_IN_BIN')
+            # self.get_fields_in_bin = get_fields_in_radec_bin
         else:
-            self.bin_space = 'azel'
-            self.get_fields_in_bin = get_fields_in_azel_bin
+            # self.get_fields_in_bin = get_fields_in_azel_bin
             self.bin2fields_in_bin = None
 
-        self.field2nvisits = {int(fid): int(count) for fid, count in test_dataset.field2nvisits.items()}
+        self.field2nvisits = {int(fid): int(count) for fid, count in field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
 
-        self.hpGrid = test_dataset.hpGrid
-        self.nbins = len(self.hpGrid.lon)
+        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
+            = setup_feature_names(cfg, hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         
-        self.base_state_feature_names = test_dataset.base_feature_names
-        self.base_pointing_feature_names = test_dataset.base_pointing_feature_names
-        self.base_bin_feature_names = test_dataset.base_bin_feature_names
-        self.state_feature_names = test_dataset.state_feature_names
-        self.pointing_feature_names = test_dataset.pointing_feature_names
-        self.bin_feature_names = test_dataset.bin_feature_names
-
-        self.pointing_pd_nightgroup = test_dataset._df.groupby('night')
+        self.pointing_pd_nightgroup = pointing_pd_nightgroup
         if self.include_bin_features:
-            self.bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
+            self.bin_pd_nightgroup = bin_pd_nightgroup
 
         self.max_nights = max_nights
         if max_nights is None:
             self.max_nights = self.pointing_pd_nightgroup.ngroups
-        if hasattr(test_dataset, 'reward_func'):
-            self._reward_func = test_dataset.reward_func
-        else:
-            self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
+        # if hasattr(test_dataset, 'reward_func'):
+        #     self._reward_func = test_dataset.reward_func
+        # else:
+        #     self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
 
-        self.obs_dim = test_dataset.obs_dim
+        self.obs_dim = cfg.get('experiment.data.obs_dim')
         self.observation_space = gym.spaces.Box(
             low=-100, #np.min(dataset.obs),
             high=1e8,
@@ -321,6 +330,7 @@ class OfflineEnv(BaseTelescope):
 
         self._state = np.zeros(self.obs_dim, dtype=np.float32)
         super().__init__()
+    
 
     def reset(self, seed=None, options=None):
         """Start a new episode.
@@ -624,9 +634,10 @@ class OfflineEnv(BaseTelescope):
         if not self.hpGrid.is_azel:
             self._action_mask = self._get_radec_action_mask(action, time)
 
+    #TODO: refactor with offline_datasets
     def _do_noncyclic_normalizations(self, state):
         """Performs z-score normalization on any non-periodic features, including bin-specific features"""
-        if self.do_inverse_airmass:
+        if self.do_inverse_norm:
             airmass_mask = np.array(['airmass' in feat_name for feat_name in self.state_feature_names], dtype=bool)
             normalized_airmasses = 1.0 / state[airmass_mask]
             airmasses_fixed_nans = np.where(np.isnan(normalized_airmasses), 10.0, normalized_airmasses)
@@ -639,13 +650,6 @@ class OfflineEnv(BaseTelescope):
                 ], dtype=bool)
             state[max_norm_mask] = state[max_norm_mask] / (np.pi/2)
 
-        # z-score normalization for any non-periodic features
-        # if self.do_z_score_norm:
-        #     z_score_mask = np.array([
-        #     any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-        #     for feat_name in self.state_feature_names
-        #     ])
-        #     state[z_score_mask] = ((state[z_score_mask] - self.zscore_means) / self.zscore_stds)
-        state[np.isnan(state)] = 10 # for airmass nan values -- only airmass should be high
+        state[np.isnan(state)] = 10 # for airmass nan values
 
         return state

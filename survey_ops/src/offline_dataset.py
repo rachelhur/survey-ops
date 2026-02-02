@@ -8,6 +8,7 @@ from tqdm import tqdm
 from survey_ops.utils import units
 from survey_ops.utils import ephemerides
 from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.utils.config import Config
 import healpy as hp
 
 import pandas as pd
@@ -33,79 +34,112 @@ def get_lst(timestamp):
 def reward_func_v0():
     raise NotImplementedError
 
+            
+def expand_feature_names_for_cyclic_norm(feature_names, cyclical_feature_names):
+    # periodic vars first
+    feature_names = [
+        element 
+        for feat_name in feature_names
+        for element in ([feat_name + '_cos', feat_name + '_sin'] 
+                        if any(string in feat_name and 'frac' not in feat_name for string in cyclical_feature_names)
+                        else [feat_name])
+]
+    return feature_names
+
+def setup_feature_names(cfg, hpGrid, do_cyclical_norm):
+    # Any experiment will likely have at least these state features
+    include_default_features = cfg.get('experiment.data.include_default_features')
+    include_bin_features = cfg.get('experiment.data.include_bin_features')
+    additional_pointing_features = cfg.get('experiment.data.additional_pointing_features')
+    additional_bin_features = cfg.get('experiment.data.additional_bin_features')
+    
+    if not include_default_features:
+        required_point_features = []
+        required_bin_features = []
+    else:
+        required_point_features = cfg.get('feature_names.DEFAULT_PNTG_FEATURE_NAMES') \
+                                    if include_default_features else []
+        required_bin_features = cfg.get('feature_names.DEFAULT_BIN_FEATURE_NAMES') \
+                                    if (include_default_features and include_bin_features) else []
+        if include_bin_features and hpGrid is not None:
+            required_bin_features += ['ra', 'dec'] if hpGrid.is_azel else ['az', 'el']
+    
+    # Include additional features not in default features above
+    pointing_feature_names = required_point_features + additional_pointing_features
+    if include_bin_features:
+        bin_feature_names = required_bin_features + additional_bin_features
+        bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(hpGrid.idx_lookup))])
+        bin_feature_names = bin_feature_names.flatten().tolist()
+    else:
+        bin_feature_names = []
+
+    base_pointing_feature_names = pointing_feature_names.copy()
+    base_bin_feature_names = bin_feature_names.copy()
+    base_feature_names = base_pointing_feature_names + base_bin_feature_names
+
+    # Replace cyclical features with their cyclical transforms/normalizations if on  
+    if do_cyclical_norm:
+        pointing_feature_names = expand_feature_names_for_cyclic_norm(pointing_feature_names, cfg.get('feature_names.CYCLICAL_FEATURE_NAMES'))
+        bin_feature_names = expand_feature_names_for_cyclic_norm(bin_feature_names, cfg.get('feature_names.CYCLICAL_FEATURE_NAMES'))
+    else:
+        pointing_feature_names = pointing_feature_names
+        bin_feature_names = bin_feature_names
+    
+    state_feature_names = pointing_feature_names + bin_feature_names
+    
+    return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
+
+
 class OfflineDECamDataset(torch.utils.data.Dataset):
-    def __init__(self, 
-                df: pd.DataFrame, 
-                specific_years: list = None,
-                specific_months: list = None,
-                specific_days: list = None,
-                specific_filters: list = None,
-                binning_method = 'healpix',
-                bin_space = 'radec',
-                nside=None,
-                num_bins_1d = None,
-                additional_pointing_features = [],
-                additional_bin_features=[],
-                include_default_features=True,
-                include_bin_features=True,
-                do_cyclical_norm=True,
-                do_max_norm=True,
-                do_inverse_airmass=True,
-                calculate_action_mask=True,
-                objects_to_remove: list = ['guide', 'DES vvds', 'J0', 'gwh', 'DESGW', 'Alhambra-8', 'cosmos', 'COSMOS hex', 'TMO', 'LDS', 'WD0', 'DES supernova hex', 'NGC', 'ec'],
-                remove_large_time_diffs=True,
-                field2radec_filepath='../data/field2radec.json',
-                field2name_filepath = '../data/field2name.json',
-                field2nvisits_filepath = '../data/field2nvisits.json'
-                ):
-        assert binning_method in ['uniform', 'healpix'], 'bining_method must be uniform or healpix'
-        assert (binning_method == 'uniform' and num_bins_1d is not None) or (binning_method == 'healpix' and nside is not None), 'num_bins_1d must be specified for uniform and nside must be specified for healpix'
+    def __init__(self, df=None, cfg: Config = None, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
+        assert cfg is not None, "Must pass Config object"
 
-        # Set up static attributes
-        self.do_cyclical_norm = do_cyclical_norm
-        self.do_max_norm = do_max_norm
-        self.do_inverse_airmass = do_inverse_airmass
-        self.objects_to_remove = objects_to_remove
-        self.remove_large_time_diffs = remove_large_time_diffs
+        # Assign static attributes
+        self.do_cyclical_norm = cfg.get('experiment.data.do_cyclical_norm')
+        self.do_max_norm = cfg.get('experiment.data.do_max_norm')
+        self.do_inverse_airmass = cfg.get('experiment.data.do_inverse_airmass')
+        self.objects_to_remove = cfg.get('experiment.data.objects_to_remove')
+        self._calculate_action_mask = cfg.get('experiment.algorithm.algorithm_name') != 'BC' # should be False if using bc (to minimize data processing time), otherwise True
 
-        self.z_score_feature_names = []
-        self.cyclical_feature_names = ['ra', 'az', 'ha'] if self.do_cyclical_norm else []
-        self.max_norm_feature_names = ['dec', 'el'] if self.do_max_norm else []
-        self._calculate_action_mask = calculate_action_mask # should be False if using bc (to minimize data processing time), otherwise True
+        # Get global feature names
+        self.cyclical_feature_names = cfg.get('feature_names.CYCLICAL_FEATURE_NAMES') if self.do_cyclical_norm else []
+        self.max_norm_feature_names = cfg.get('feature_names.MAX_NORM_FEATURE_NAMES') if self.do_max_norm else []
+
+        # Get other configurations
+        bin_space = cfg.get('experiment.data.bin_space')
+        binning_method = cfg.get('experiment.data.binning_method')
+        nside = cfg.get('experiment.data.nside')
+        remove_large_time_diffs = cfg.get('experiment.data.remove_large_time_diffs')
+        include_bin_features = cfg.get('experiment.data.include_bin_features')
+        num_bins_1d = cfg.get('experiment.data.num_bins_1d')
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
-        self.bin2coord = {int(i): (lon, lat) for i, (lon, lat) in enumerate(zip(self.hpGrid.lon, self.hpGrid.lat))}
-        
+    
+
         # Save list of all feature names
-        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names =\
-            self._setup_feature_names(include_default_features, include_bin_features, additional_pointing_features, additional_bin_features)
+        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
+            = setup_feature_names(cfg, hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         
         # Load all fields and nvisits that exist in entire offline dataset (even if not specified in specific_years, specific_months, specific_days)
-        with open(field2radec_filepath, 'r') as f:
+        with open(cfg.get('paths.FIELD2RADEC'), 'r') as f:
             self.field2radec = json.load(f)
-        with open(field2name_filepath, 'r') as f:
-            self.field2name = json.load(f)
-        with open(field2nvisits_filepath, 'r') as f: # Not using nvisits right now
-            self.field2nvisits = json.load(f)
-
         self.field2radec = {int(k): v for k, v in self.field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
-
-        # # Dynamically assign self.get_fields_in_bin -- fields in azel depend on time, fields in radec are static
-        # if self.hpGrid.is_azel:
-        #    # If bins in azel, fields in bin depend on timestamp      
-        #     self.get_fields_in_bin = get_fields_in_azel_bin
-        # else:
-        #     # If bins in radec, exists a static file with fields in bin for all times
-        #     bin2fields_in_bin_filepath = f'../data/nside{nside}_bin2fields_in_bin.json'
-        #     with open(bin2fields_in_bin_filepath, 'r') as f:
-        #         self.bin2fields_in_bin = json.load(f)
-        #     self.get_fields_in_bin = get_fields_in_radec_bin
+        with open(cfg.get('paths.FIELD2NAME'), 'r') as f:
+            self.field2name = json.load(f)
+        # with open(field2nvisits_filepath, 'r') as f: # Not using nvisits right now
+            # self.field2nvisits = json.load(f)
 
         # Process dataframe to add columns for pointing features
-        df = self._process_dataframe(df, specific_years=specific_years, specific_months=specific_months, specific_days=specific_days, specific_filters=specific_filters)
+        df = self._process_dataframe(
+            df, 
+            specific_years=cfg.get('experiment.data.specific_years') if specific_years is None else specific_years, 
+            specific_months=cfg.get('experiment.data.specific_months') if specific_months is None else specific_months, 
+            specific_days=cfg.get('experiment.data.specific_days') if specific_days is None else specific_days, 
+            specific_filters=cfg.get('experiment.data.specific_filters') if specific_filters is None else specific_filters
+        )
         self._df = df # Save for diagnostics
 
         # Set dataset-wide (across observation nights) attributes
@@ -128,10 +162,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             binning_method=binning_method, 
             bin_space=bin_space,
             timestamps=df.groupby('night').tail(-1)['timestamp'], # all but zenith timestamps,
-            remove_large_time_diffs=self.remove_large_time_diffs
+            remove_large_time_diffs=remove_large_time_diffs
             )
+        
         self.num_transitions = num_transitions
-        self.np_states, self.np_next_states = states, next_states
 
         # # Save Transitions as tensors
         self.states = torch.tensor(states, dtype=torch.float32)
@@ -147,43 +181,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Normalize states and next_states in place
         self._do_noncyclic_normalizations()
 
-    def _setup_feature_names(self, include_default_features, include_bin_features, additional_pointing_features, additional_bin_features):
-        # Any experiment will likely have at least these state features
-        if not include_default_features:
-            required_point_features = []
-            required_bin_features = []
-        else:
-            required_point_features = ['ra', 'dec', 'az', 'el', 'airmass', 'ha', 'sun_ra', 'sun_dec', 'sun_az', 'sun_el', 'moon_ra', 'moon_dec', 'moon_az', 'moon_el', 'time_fraction_since_start'] \
-                                        if include_default_features else []
-            required_bin_features = ['ha', 'airmass', 'ang_dist_to_moon'] \
-                                        if (include_default_features and include_bin_features) else []
-            if include_bin_features and self.hpGrid is not None:
-                required_bin_features += ['ra', 'dec'] if self.hpGrid.is_azel else ['az', 'el']
-
-        # Include additional features not in default features above
-        pointing_feature_names = required_point_features + additional_pointing_features
-        if include_bin_features:
-            bin_feature_names = required_bin_features + additional_bin_features
-            bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(self.hpGrid.idx_lookup))])
-            bin_feature_names = bin_feature_names.flatten().tolist()
-        else:
-            bin_feature_names = []
-
-        base_pointing_feature_names = pointing_feature_names.copy()
-        base_bin_feature_names = bin_feature_names.copy()
-        base_feature_names = base_pointing_feature_names + base_bin_feature_names
-
-        # Replace cyclical features with their cyclical transforms/normalizations if on  
-        if self.do_cyclical_norm:
-            pointing_feature_names = self._expand_feature_names_for_cyclic_norm(pointing_feature_names)
-            bin_feature_names = self._expand_feature_names_for_cyclic_norm(bin_feature_names)
-        else:
-            pointing_feature_names = pointing_feature_names
-            bin_feature_names = bin_feature_names
-        
-        state_feature_names = pointing_feature_names + bin_feature_names
-        
-        return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
         
     def __len__(self):
         return self.states.shape[0]
@@ -198,17 +195,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.action_masks[idx]
         )
         return transition
-            
-    def _expand_feature_names_for_cyclic_norm(self, feature_names):
-        # periodic vars first
-        feature_names = [
-            element 
-            for feat_name in feature_names
-            for element in ([feat_name + '_cos', feat_name + '_sin'] 
-                            if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names)
-                            else [feat_name])
-        ]
-        return feature_names
 
     def _do_noncyclic_normalizations(self):
         """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
@@ -228,33 +214,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             logger.debug('(Then divide by max val for each feature)')
             self.states[:, max_norm_mask] = self.states[:, max_norm_mask] / (np.pi/2)
             self.next_states[:, max_norm_mask] = self.next_states[:, max_norm_mask] / (np.pi/2)
-
-        # z-score normalization for any non-periodic features
-        # if self.do_z_score_norm:
-        #     logger.info("Performing z-score normalizations")
-        #     z_score_mask = torch.tensor(np.array([
-        #         any(z_feat in feat_name for z_feat in self.z_score_feature_names) 
-        #         for feat_name in self.state_feature_names
-        #         ], dtype=bool)
-        #         , dtype=torch.bool
-        #     )
-
-        #     self.means = torch.mean(self.next_states, axis=0)[z_score_mask]
-        #     self.stds = torch.std(self.next_states, axis=0)[z_score_mask]
-        #     self.next_states[:, z_score_mask] = ((self.next_states[:, z_score_mask] - self.means) / self.stds)
-        #     self.next_states[torch.isnan(self.next_states)] = 10
-
-        #     mask_zenith = self.states == 0 # need to find a way to mask zenith states
-        #     states = self.states.clone()
-
-        #     states[:, z_score_mask] = ((states[:, z_score_mask] - self.means) / self.stds)
-        #     states[mask_zenith] = 0.
-        #     states[torch.isnan(states)] = 10
-        #     self.states = states
-        #     raise NotImplementedError # see comment above about masking zenith states
-        # else:
-        #     self.means = None
-        #     self.stds = None
 
     def _relabel_mislabelled_objects(self, df):
         """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
@@ -308,6 +267,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
     def _process_dataframe(self, df, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
         """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
         df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
         # Get observations for specific years, days, filters, etc.

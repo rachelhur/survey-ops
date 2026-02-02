@@ -23,6 +23,7 @@ from survey_ops.utils.pytorch_utils import seed_everything
 from survey_ops.utils.script_utils import setup_algorithm, setup_logger, get_device, load_raw_data_to_dataframe
 from survey_ops.src.environments import OfflineEnv
 from survey_ops.src.offline_dataset import OfflineDECamDataset
+from survey_ops.utils.config import Config
 import logging
 logger = logging.getLogger(__name__)
 
@@ -195,19 +196,17 @@ def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, ma
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
-
     # Test data selection
-    parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
-    parser.add_argument('--json_path', type=str, default='../data/decam-exposures-20251211.json', help='Path to offline dataset metadata json file')
-
+    # parser.add_argument('--SISPI_file', type=str, help='Path to a SISPI-like json file with a list of fields.')
     parser.add_argument('--trained_model_dir', type=str, default='../experiment_results/test_experiment/', help='Directory of the trained model to evaluate')
     parser.add_argument('--evaluation_name', type=str, default='evaluation_1', help='Name for this evaluation run')
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the test dataset')
     parser.add_argument('--specific_months', type=int, nargs='*', default=None, help='Specific months to include in the test dataset')
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the test dataset')
     parser.add_argument('--logging_level', type=str, default='info', help='Logging level. Options: info, debug')
+    parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
+    parser.add_argument('--json_path', type=str, default='../data/decam-exposures-20251211.json', help='Path to offline dataset metadata json file')
 
     # Evaluation hyperparameters
     parser.add_argument('--num_episodes', type=int, default=1, help='Number of evaluation episodes to run')
@@ -215,6 +214,9 @@ def main():
     # Parse args
     args = parser.parse_args()
     args_dict = vars(args)
+
+    # Set up results directory to save outputs
+    cfg = Config(args.trained_model_dir + 'config.json')
 
     # Set up output directories
     results_outdir = args.trained_model_dir + args.evaluation_name + '/'
@@ -246,17 +248,18 @@ def main():
     raw_data_df = load_raw_data_to_dataframe(args.fits_path, args.json_path)
     logger.info("Processing raw data into OfflineDataset()...")
     
-    with open(args.trained_model_dir + 'offline_dataset_config.pkl', 'rb') as f:
-        OFFLINE_DATASET_CONFIG = pickle.load(f)
-    nside = OFFLINE_DATASET_CONFIG['nside']
-    bin_space = OFFLINE_DATASET_CONFIG['bin_space']
-
+    nside = cfg.get('experiment.data.nside')
 
     logger.info("Loading test dataset with same config as training dataset...")
-    test_dataset = OfflineDECamDataset(raw_data_df, specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days, **OFFLINE_DATASET_CONFIG) 
-                                    #    args.binning_method, args.nside, args.bin_space, args.test_specific_years, args.test_specific_months, args.test_specific_days, \
-                                        # args.no_bin_features, args.no_cyclical_norm, args.no_max_norm, args.no_inverse_airmass)
-    
+    test_dataset = OfflineDECamDataset(raw_data_df, cfg=cfg, 
+                                       specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days,
+                                       ) 
+    pointing_pd_nightgroup = test_dataset._df.groupby('night')
+    if cfg.get('experiment.data.include_bin_features'):
+        bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
+    else:
+        bin_pd_nightgroup = None
+        
     # Plot State x action space via cornerplot
     corner_plot = sns.pairplot(test_dataset._df,
              vars=test_dataset.pointing_feature_names + ['bin'],
@@ -265,11 +268,15 @@ def main():
             )
     corner_plot.figure.savefig(results_outdir + 'state_times_action_space_corner_plot.png')
 
-    with open(args.trained_model_dir + 'model_hyperparams.pkl', 'rb') as f:
-        model_hyperparams = pickle.load(f)
-
     logger.info("Setting up agent...")
-    algorithm = setup_algorithm(**model_hyperparams, device=device)
+    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
+                            obs_dim=cfg.get('experiment.data.obs_dim'), num_actions=cfg.get('experiment.data.num_actions'), loss_fxn=cfg.get('experiment.algorithm.loss_function'),
+                            hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), 
+                            lr_scheduler=cfg.get('experiment.training.lr_scheduler'), device=device, 
+                            lr_scheduler_kwargs=cfg.get('experiment.training.lr_scheduler_kwargs'), 
+                            lr_scheduler_epoch_start=cfg.get('experiment.training.lr_scheduler_epoch_start'), 
+                            lr_scheduler_num_epochs=cfg.get('experiment.training.lr_scheduler_num_epochs'), gamma=cfg.get('experiment.algorithm.gamma'), 
+                            tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
     agent = Agent(
         algorithm=algorithm,
         train_outdir=args.trained_model_dir,
@@ -284,7 +291,7 @@ def main():
     entry_point=OfflineEnv,
     )
 
-    env = gym.make(id=f"gymnasium_env/{env_name}", test_dataset=test_dataset, max_nights=None)
+    env = gym.make(id=f"gymnasium_env/{env_name}", cfg=cfg, max_nights=None, pointing_pd_nightgroup=pointing_pd_nightgroup, bin_pd_nightgroup=bin_pd_nightgroup)
 
     # Plot predicted action for each state
     with torch.no_grad():
@@ -310,7 +317,7 @@ def main():
 
     # Roll out policy
     logger.info("Starting evaluation...")
-    agent.evaluate(env=env, num_episodes=args.num_episodes, field_choice_method='random', eval_outdir=results_outdir)
+    agent.evaluate(env=env, cfg=cfg, num_episodes=args.num_episodes, field_choice_method='random', eval_outdir=results_outdir)
     logger.info("Evaluation complete.")
 
     with open(results_outdir + 'eval_metrics.pkl', 'rb') as handle:
@@ -349,7 +356,7 @@ def main():
         # Plot state features vs timestamp for first episode
         fig, axs = plt.subplots(len(test_dataset.pointing_feature_names), figsize=(10, len(test_dataset.pointing_feature_names)*5))
         for i, feature_row in enumerate(eval_metrics['ep-0']['observations'][f'night-{night_idx}'].T[:len(test_dataset.pointing_feature_names)]):
-            feat_name = env.unwrapped.test_dataset.pointing_feature_names[i]
+            feat_name = test_dataset.pointing_feature_names[i]
             eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
             eval_data = feature_row.copy()
             if feat_name == 'airmass':
@@ -366,11 +373,13 @@ def main():
         plt.close()
 
         # Plot static bin and field radec scatter plots
-        eval_bin_radecs = np.array([env.unwrapped.test_dataset.bin2coord[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
-        orig_bin_radecs = np.array([env.unwrapped.test_dataset.bin2coord[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
+        bin2coord = {int(i): (lon, lat) for i, (lon, lat) in enumerate(zip(test_dataset.hpGrid.lon, test_dataset.hpGrid.lat))}
+
+        eval_bin_radecs = np.array([bin2coord[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
+        orig_bin_radecs = np.array([bin2coord[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
         
-        eval_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
-        orig_field_radecs = np.array([env.unwrapped.test_dataset.field2radec[field_id] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
+        eval_field_radecs = np.array([test_dataset.field2radec[field_id] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
+        orig_field_radecs = np.array([test_dataset.field2radec[field_id] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
         
         if len(orig_field_radecs) != 1:
             # Plot bins
