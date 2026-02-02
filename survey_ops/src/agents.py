@@ -10,7 +10,10 @@ import os
 import pickle
 import random
 
+
 from survey_ops.utils.interpolate import interpolate_on_sphere
+from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.utils import ephemerides
 import logging
 
 # Get the logger associated with this module's name (e.g., 'my_module')
@@ -19,7 +22,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 class Agent:
     """
-    A simple, generic agent/wrapper for fitting and evaluating Q-learning algorithms. 
+    A simple, generic agent/wrapper for fitting and evaluating RL algorithms. 
 
     This class abstracts training loops, evaluation, saving/loading, and interaction with environment. It expects an underlying `algorithm` object that
     implements:
@@ -214,7 +217,7 @@ class Agent:
         with open(val_train_metrics_filepath, 'wb') as handle:
             pickle.dump(val_train_metrics, handle)
     
-    def evaluate(self, env, num_episodes, field_choice_method='interp', eval_outdir=None):
+    def evaluate(self, env, cfg, num_episodes, field_choice_method='interp', eval_outdir=None):
         """Evaluates the agent in an environment for multiple episodes.
 
         Runs greedy (epsilon-free) policy evaluation using the current
@@ -247,12 +250,15 @@ class Agent:
         episode_rewards = []
         eval_metrics = {}
 
-        # TODO: save these somewhere as some config instead of using env.unwrapped
-        get_fields_in_bin = env.unwrapped.get_fields_in_bin
+        if cfg.get('experiment.data.bin_space') == 'radec':
+            get_fields_in_bin = get_fields_in_radec_bin
+        else:
+            get_fields_in_bin = get_fields_in_azel_bin
         field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
         bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
-        hpGrid = env.unwrapped.test_dataset.hpGrid # change to nside and recreate healpix
-       
+        hpGrid = None if cfg.get('experiment.data.binning_method') != 'healpix' else ephemerides.HealpixGrid(nside=cfg.get('experiment.data.nside'), is_azel=(cfg.get('experiment.data.bin_space') == 'azel'))
+
+
         with logging_redirect_tqdm():
             for episode in tqdm(range(num_episodes)):
                 obs, info = env.reset()
@@ -383,3 +389,6 @@ class Agent:
         elif field_choice_method == 'random':
             field_id = random.choice(field_ids_in_bin)
             return field_id
+        
+    def _save_SISPI_schedule(self, outdir):
+        return
