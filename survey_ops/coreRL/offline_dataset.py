@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from survey_ops.utils import units
 from survey_ops.utils import ephemerides
-from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
+# from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
 from survey_ops.utils.config import Config
 import healpy as hp
 
@@ -112,6 +112,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         remove_large_time_diffs = cfg.get('experiment.data.remove_large_time_diffs')
         include_bin_features = cfg.get('experiment.data.include_bin_features')
         num_bins_1d = cfg.get('experiment.data.num_bins_1d')
+        lookup_dir = str(cfg.get('paths.lookup_dir'))
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
@@ -121,12 +122,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             = setup_feature_names(cfg, hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         
         # Load all fields and nvisits that exist in entire offline dataset (even if not specified in specific_years, specific_months, specific_days)
-        with open(cfg.get('paths.FIELD2RADEC'), 'r') as f:
+        with open(lookup_dir + '/' + cfg.get('paths.FIELD2RADEC'), 'r') as f:
             field2radec = json.load(f)
         self.field2radec = {int(k): v for k, v in field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
-        with open(cfg.get('paths.FIELD2NAME'), 'r') as f:
+        with open(lookup_dir + '/' +  cfg.get('paths.FIELD2NAME'), 'r') as f:
             self.field2name = json.load(f)
         # with open(field2nvisits_filepath, 'r') as f: # Not using nvisits right now
             # self.field2nvisits = json.load(f)

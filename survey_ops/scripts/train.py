@@ -4,28 +4,32 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 import torch
-import torch.nn.functional as F
 
 import time
 import pickle
 
-from survey_ops.utils import pytorch_utils
-from survey_ops.src.agents import Agent
-from survey_ops.src.algorithms import DDQN, BehaviorCloning
-from survey_ops.utils.script_utils import setup_logger, get_device, load_raw_data_to_dataframe, setup_algorithm
-from survey_ops.src.offline_dataset import OfflineDECamDataset
+from survey_ops.coreRL.agents import Agent
+from survey_ops.algorithms.factory import setup_algorithm
+from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
+from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe 
+from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
 from survey_ops.utils.config import Config
 
 import argparse
 import logging
 
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1] 
+DATA_DIR = PROJECT_ROOT / "data"
+LOOKUP_DIR = DATA_DIR / "lookups"
 
 def plot_metrics(results_outdir):
-    with open(results_outdir + 'train_metrics.pkl', 'rb') as f:
+    with open(results_outdir / 'train_metrics.pkl', 'rb') as f:
         train_metrics = pickle.load(f)
-    with open(results_outdir + 'val_metrics.pkl', 'rb') as f:
+    with open(results_outdir / 'val_metrics.pkl', 'rb') as f:
         val_metrics = pickle.load(f)
-    with open(results_outdir + 'val_train_metrics.pkl', 'rb') as f:
+    with open(results_outdir / 'val_train_metrics.pkl', 'rb') as f:
         val_train_metrics = pickle.load(f)
     # val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
 
@@ -58,7 +62,7 @@ def plot_metrics(results_outdir):
     axs[3].legend()
 
     fig.tight_layout()
-    fig.savefig(results_outdir + 'figures/' + 'loss_and_metrics_history.png')
+    fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')
 
 def main():
 
@@ -69,11 +73,11 @@ def main():
     # Data input and output file and dir setups
     parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
     parser.add_argument('--json_path', type=str, default='../data/decam-exposures-20251211.json', help='Path to offline dataset metadata json file')
-    parser.add_argument('--parent_results_dir', type=str, default='../experiment_results/', help='Path to save trained model')
-    parser.add_argument('--exp_name', type=str, default='test_experiment', help='Name of the experiment -- used to create the output directory')
+    parser.add_argument('--parent_results_dir', type=str, default='../experiment_results/', help='Name (not path) of results directory')
+    parser.add_argument('--exp_name', type=str, default='test_experiment', help='Name of the experiment -- used to create the subdir in parents_results_dir')
     
     # Algorithm setup
-    parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (ddqn or behavior_cloning)')
+    parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (DDQN or BC)')
     parser.add_argument('--loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
     parser.add_argument('--tau', type=float, default=0.005, help='Target network update rate for DDQN')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor for DDQN')
@@ -112,16 +116,16 @@ def main():
     if args.config_file:
         print(args.config_file)
         cfg = Config(args.config_file)
-        parent_results_dir = cfg.get('experiment.metadata.parent_results_dir')
+        parent_results_dir = PROJECT_ROOT / cfg.get('experiment.metadata.parent_results_dir')
         exp_name = cfg.get('experiment.metadata.exp_name')
     else:
         # Set up results directory to save outputs
-        parent_results_dir = args.parent_results_dir
+        parent_results_dir = PROJECT_ROOT / args.parent_results_dir
         exp_name = args.exp_name
         cfg = Config.from_dict(vars(args))
 
-    results_outdir = parent_results_dir + exp_name + '/'
-    fig_outdir = results_outdir + 'figures/'
+    results_outdir = parent_results_dir / exp_name
+    fig_outdir = results_outdir / 'figures/'
     if not os.path.exists(results_outdir):
         os.makedirs(results_outdir)
     if not os.path.exists(fig_outdir):
@@ -133,6 +137,7 @@ def main():
     lr_scheduler = cfg.get('experiment.training.lr_scheduler')
     lr_scheduler_epoch_start = cfg.get('experiment.training.lr_scheduler_epoch_start')
     lr_scheduler_num_epochs = cfg.get('experiment.training.lr_scheduler_num_epochs')
+    bin_space = cfg.get('experiment.data.bin_space')
     
     # assert errors dne before running rest of code
     if lr_scheduler is not None:
@@ -147,31 +152,35 @@ def main():
     logging.getLogger("fontconfig").setLevel(logging.WARNING)
     logging.getLogger("cartopy").setLevel(logging.WARNING)
 
-    logger.info("Saving results in " + results_outdir)
+    logger.info("Saving results in " + str(results_outdir))
 
     # Seed everything
-    pytorch_utils.seed_everything(args.seed)
+    seed_everything(args.seed)
 
     device = get_device()
 
     logger.info("Loading raw data...")
-    raw_data_df = load_raw_data_to_dataframe(cfg.get('paths.DFITS'), cfg.get('paths.DJSON'))
+    raw_data_df = load_raw_data_to_dataframe(DATA_DIR / cfg.get('paths.DFITS'), DATA_DIR / cfg.get('paths.DJSON'))
 
     logger.info("Processing raw data into OfflineDataset()...")
+    # Need to include paths.lookup_dir in cfg before sending to offline dataset -- brittle
+    cfg.set('paths.lookup_dir', LOOKUP_DIR)
     train_dataset = OfflineDECamDataset(
         df=raw_data_df,
         cfg=cfg
         )
     logger.info("Finished constructing train_dataset")
 
-    # Save (or update) config file after updating 
+    # Save (or update) config file after updating -- must do after getting dataset
     nside = cfg.get('experiment.data.nside')
-    cfg.set("paths.BIN2FIELDS_IN_BIN", f'../data/nside{nside}_bin2fields_in_bin.json')
-    cfg.set("paths.self", results_outdir + "config.json")
-    cfg.set("paths.outdir", results_outdir)
+    cfg.set("paths.BIN2FIELDS_IN_BIN", str(f'nside{nside}_bin2fields_in_bin.json'))
+    cfg.set("paths.BIN2COORDS", str(f'nside{nside}_bin2{bin_space}.json'))
+    cfg.set('paths.lookup_dir', str(LOOKUP_DIR))
+    cfg.set("experiment.metadata.config_path", str(results_outdir  / "config.json"))
+    cfg.set('experiment.metadata.outdir', str(results_outdir))
     cfg.set("experiment.data.obs_dim", train_dataset.obs_dim)
     cfg.set("experiment.data.num_actions", train_dataset.num_actions)
-    cfg.save(cfg.get('paths.self'))
+    cfg.save(cfg.get("experiment.metadata.config_path"))
 
     # Plot bin membership for fields in ra vs dec
     colors = [f'C{i}' for i in range(7)]
@@ -180,7 +189,7 @@ def main():
     plt.title("Fields in train data, colored by bin membership")
     plt.xlabel('ra')
     plt.ylabel('dec')
-    plt.savefig(fig_outdir + 'train_data_fields_dec_vs_ra.png')
+    plt.savefig(fig_outdir / 'train_data_fields_dec_vs_ra.png')
 
     logger.info("Plotting S x A (state x action) space cornerplot (this will take some time...)")
     # Plot State x action space via cornerplot
@@ -189,7 +198,7 @@ def main():
              kind='hist',
              corner=True
             )
-    corner_plot.figure.savefig(fig_outdir + 'state_times_action_space_corner_plot.png')
+    corner_plot.figure.savefig(fig_outdir / 'state_times_action_space_corner_plot.png')
     logger.info("Corner plot saved")
 
     fig, axs = plt.subplots(len(train_dataset.pointing_feature_names), figsize=(4, len(train_dataset.pointing_feature_names)*3))
@@ -198,7 +207,7 @@ def main():
         axs[i].hist(next_pointing_states[i])
         axs[i].set_title(f"Train distribution ({feat_name})")
     fig.tight_layout()
-    fig.savefig(fig_outdir + 'train_data_pointing_feature_distributions.png')
+    fig.savefig(fig_outdir / 'train_data_pointing_feature_distributions.png')
         
     if cfg.get('experiment.training.use_train_as_val'):
         trainloader = train_dataset.get_dataloader(batch_size, num_workers=cfg.get('experiment.training.num_workers'), pin_memory=True if device.type == 'cuda' else False, random_seed=cfg.get('experiment.metadata.seed'), return_train_and_val=False)
@@ -226,7 +235,7 @@ def main():
 
     agent = Agent(
         algorithm=algorithm,
-        train_outdir=results_outdir,
+        train_outdir=str(results_outdir) + '/',
     )
     logger.info("Starting training...")
 
@@ -269,7 +278,7 @@ def main():
         axs[1].plot(eval_sequence - target_sequence, marker='o', alpha=.5)
         axs[1].set_ylabel('Eval sequence - target sequence \n[bin number]')
         axs[1].set_xlabel('observation index')
-        fig.savefig(fig_outdir + prefix + 'eval_and_target_bin_sequences.png')
+        fig.savefig(fig_outdir / (prefix + 'eval_and_target_bin_sequences.png'))
 
 if __name__ == "__main__":
     main()

@@ -8,9 +8,8 @@ from survey_ops.utils import ephemerides, units
 from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
-from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
-from survey_ops.utils.config import Config
-from survey_ops.src.offline_dataset import setup_feature_names
+from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.coreRL.offline_dataset import setup_feature_names
 
 import json
 
@@ -278,15 +277,15 @@ class OfflineEnv(BaseTelescope):
         nside = cfg.get('experiment.data.nside')
 
         # Dataset-wide mappings        
-        with open(cfg.get('paths.FIELD2RADEC'), 'r') as f:
+        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2RADEC'), 'r') as f:
             field2radec = json.load(f)
-        with open(cfg.get('paths.FIELD2NVISITS'), 'r') as f:
+        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2NVISITS'), 'r') as f:
             field2nvisits = json.load(f)
         self.field2radec = {int(k): v for k, v in field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
         
-        with open(cfg.get('paths.FIELD2NAME'), 'r') as f:
+        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2NAME'), 'r') as f:
             self.field2name = json.load(f)
         
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
@@ -294,7 +293,8 @@ class OfflineEnv(BaseTelescope):
 
         # Bin-space dependent function to get fields in bin
         if not self.hpGrid.is_azel:
-            self.bin2fields_in_bin = cfg.get('paths.BIN2FIELDS_IN_BIN')
+            with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.BIN2FIELDS_IN_BIN'), 'r') as f:
+                self.bin2fields_in_bin = json.load(f)
             # self.get_fields_in_bin = get_fields_in_radec_bin
         else:
             # self.get_fields_in_bin = get_fields_in_azel_bin

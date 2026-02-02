@@ -1,5 +1,14 @@
 import json
 
+from importlib import resources
+import json
+
+def load_internal_mapping(filename):
+    # This looks inside survey_ops/core/mappings/ even if the package is installed
+    pkg_path = resources.files("data.lookups").joinpath(filename)
+    with pkg_path.open("r") as f:
+        return json.load(f)
+
 class Config:
     def __init__(self, config_path):
         self.config_path = config_path

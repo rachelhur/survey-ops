@@ -12,7 +12,7 @@ import random
 
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.src.eval_utils import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
 from survey_ops.utils import ephemerides
 import logging
 
@@ -45,6 +45,7 @@ class Agent:
             self,
             algorithm,
             train_outdir,
+            cfg=None,
             # env: gym.Env = None,
             ):
         """
@@ -55,11 +56,24 @@ class Agent:
             outdir (str): directory to save results
             normalize_obs (bool): Whether or not to normalize observations
         """
-        self.algorithm = algorithm
-        self.device = algorithm.device
-        if not os.path.exists(train_outdir):
-            os.makedirs(train_outdir)
-        self.train_outdir = train_outdir
+        if cfg is not None:
+            self._setup_from_config(cfg)
+        else:
+            self.algorithm = algorithm
+            self.device = algorithm.device
+            if not os.path.exists(train_outdir):
+                os.makedirs(train_outdir)
+            self.train_outdir = train_outdir
+    
+    def _setup_from_config(self, cfg):
+        # algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
+        #                     obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg.get('experiment.algorithm.loss_function'),
+        #                     hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), lr_scheduler=lr_scheduler, 
+        #                     device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 
+        #                     lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg.get('experiment.algorithm.gamma'), 
+        #                     tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
+        raise NotImplementedError
+
         
     def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, patience=10, train_log_freq=10):
         """Trains the agent on a transition dataset.

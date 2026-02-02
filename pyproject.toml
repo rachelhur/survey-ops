@@ -9,3 +9,7 @@ version = "0.1.0"
 
 [tool.setuptools.packages.find]
 include = ["survey_ops*"]
+
+[project.scripts]
+model-train = "survey_ops.scripts.train:main"
+model-eval = "survey_ops.scripts.eval:main"

@@ -6,40 +6,42 @@ import seaborn as sns
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, TensorDataset
 import gymnasium as gym
 
 import json
-import fitsio
 import pandas as pd
-import time
 import logging
 
 from survey_ops.plotting import plot_schedule_from_file
-from survey_ops.utils import pytorch_utils
-from survey_ops.src.agents import Agent
-from survey_ops.src.algorithms import DDQN, BehaviorCloning
-from survey_ops.utils.pytorch_utils import seed_everything
-from survey_ops.utils.script_utils import setup_algorithm, setup_logger, get_device, load_raw_data_to_dataframe
-from survey_ops.src.environments import OfflineEnv
-from survey_ops.src.offline_dataset import OfflineDECamDataset
+from survey_ops.coreRL.agents import Agent
+from survey_ops.utils.sys_utils import seed_everything
+from survey_ops.algorithms import setup_algorithm
+from survey_ops.utils.sys_utils import setup_logger, get_device
+from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe
+from survey_ops.coreRL.environments import OfflineEnv
+from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
 from survey_ops.utils.config import Config
 import logging
 logger = logging.getLogger(__name__)
 
 import argparse
 
-def save_field_and_bin_schedules(eval_metrics, pd_group, save_dir, night_idx, make_gif=True, nside=None, is_azel=False, whole=False):
+
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[2] 
+DATA_DIR = PROJECT_ROOT / "data"
+
+def save_schedule(eval_metrics, pd_group, save_dir, night_idx, make_gifs=True, nside=None, is_azel=False, whole=False, bin2pos_filepath=None, field2radec_filepath=None):
     # Save timestamps, field_ids, and bin numbers
     bin_space = 'azel' if is_azel else 'radec'
     assert os.path.exists(save_dir)
 
-    bin2pos_filepath = f'../data/nside{nside}_bin2{bin_space}.json'
-    field2radec_filepath = f'../data/field2radec.json'
     with open(bin2pos_filepath) as f:
         bin2pos = json.load(f)
     with open(field2radec_filepath) as f:
         field2radec = json.load(f)
+
 
     eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
     expert_timestamps = pd_group['timestamp'].values
@@ -199,6 +201,7 @@ def main():
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
     # Test data selection
     # parser.add_argument('--SISPI_file', type=str, help='Path to a SISPI-like json file with a list of fields.')
+    parser.add_argument('--make_gifs', action='store_true', help="Whether to create the set of gifs. Currently can only choose to make all or none.")
     parser.add_argument('--trained_model_dir', type=str, default='../experiment_results/test_experiment/', help='Directory of the trained model to evaluate')
     parser.add_argument('--evaluation_name', type=str, default='evaluation_1', help='Name for this evaluation run')
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the test dataset')
@@ -219,12 +222,17 @@ def main():
     cfg = Config(args.trained_model_dir + 'config.json')
 
     # Set up output directories
-    results_outdir = args.trained_model_dir + args.evaluation_name + '/'
+    SCRIPT_DIR = Path(__file__).resolve().parent
+    PROJECT_ROOT = SCRIPT_DIR.parents[1] 
+    DATA_DIR = PROJECT_ROOT / "data"
+    LOOKUP_DIR = DATA_DIR / "lookups"
+
+    results_outdir = cfg.get('experiment.metadata.outdir') + '/' + args.evaluation_name + '/'
     if not os.path.exists(results_outdir):
         os.makedirs(results_outdir)
 
     # Set up logging
-    logger = setup_logger(save_dir=results_outdir, logging_filename='eval.log', logging_level=args.logging_level)
+    logger = setup_logger(save_dir=Path(results_outdir).resolve(), logging_filename='eval.log', logging_level=args.logging_level)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.getLogger("pytorch").setLevel(logging.WARNING)
     logging.getLogger("numpy").setLevel(logging.WARNING)
@@ -240,12 +248,12 @@ def main():
         logger.info(f"{key}: {value}")
 
     # Seed everything
-    pytorch_utils.seed_everything(args.seed)
+    seed_everything(args.seed)
     # torch.set_default_dtype(torch.float32)
 
     device = get_device()
     logger.info("Loading raw data...")
-    raw_data_df = load_raw_data_to_dataframe(args.fits_path, args.json_path)
+    raw_data_df = load_raw_data_to_dataframe(DATA_DIR / cfg.get('paths.DFITS'), DATA_DIR / cfg.get('paths.DJSON'))
     logger.info("Processing raw data into OfflineDataset()...")
     
     nside = cfg.get('experiment.data.nside')
@@ -254,11 +262,6 @@ def main():
     test_dataset = OfflineDECamDataset(raw_data_df, cfg=cfg, 
                                        specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days,
                                        ) 
-    pointing_pd_nightgroup = test_dataset._df.groupby('night')
-    if cfg.get('experiment.data.include_bin_features'):
-        bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
-    else:
-        bin_pd_nightgroup = None
         
     # Plot State x action space via cornerplot
     corner_plot = sns.pairplot(test_dataset._df,
@@ -291,6 +294,12 @@ def main():
     entry_point=OfflineEnv,
     )
 
+    # Creat env
+    pointing_pd_nightgroup = test_dataset._df.groupby('night')
+    if cfg.get('experiment.data.include_bin_features'):
+        bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
+    else:
+        bin_pd_nightgroup = None
     env = gym.make(id=f"gymnasium_env/{env_name}", cfg=cfg, max_nights=None, pointing_pd_nightgroup=pointing_pd_nightgroup, bin_pd_nightgroup=bin_pd_nightgroup)
 
     # Plot predicted action for each state
@@ -325,7 +334,11 @@ def main():
 
     logger.info("Generating evaluation plots...")
 
+    bin2pos_filepath = cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.BIN2COORDS')
+    field2radec_filepath = cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2RADEC')
+
     ep_num = 0
+    
     # Plot field_id and bin vs step for first episode
     for night_idx, (night_name, night_group) in enumerate(test_dataset._df.groupby('night')):
         # Get date in string form for plots
@@ -407,24 +420,8 @@ def main():
             plt.close()
 
         logger.info(f'Creating schedule gif for {night_idx}th night')
-        save_field_and_bin_schedules(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gif=True, is_azel=test_dataset.hpGrid.is_azel)
+        save_schedule(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gifs=args.make_gifs, 
+                      is_azel=test_dataset.hpGrid.is_azel, bin2pos_filepath=bin2pos_filepath, field2radec_filepath=field2radec_filepath)
         
-        # # Plot bins
-        # run_plotting(
-        #     outfile=subdir_path + "bin_schedule.gif",
-        #     schedule=subdir_path + "bin_schedule.csv",
-        #     plot_type="bin",
-        #     bins=f"../data/nside16_bin2{bin_space}.json",
-        #     fields=None,
-        #     nside=nside,
-        #     compare=True,
-        #     policy=False,
-        #     is_azel=test_dataset.hpGrid.is_azel
-        #     )
-        
-        # Plot fields
-
-        # Plot both
-
 if __name__ == "__main__":
     main()
