@@ -116,15 +116,14 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
     
-
         # Save list of all feature names
         self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
             = setup_feature_names(cfg, hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         
         # Load all fields and nvisits that exist in entire offline dataset (even if not specified in specific_years, specific_months, specific_days)
         with open(cfg.get('paths.FIELD2RADEC'), 'r') as f:
-            self.field2radec = json.load(f)
-        self.field2radec = {int(k): v for k, v in self.field2radec.items()}
+            field2radec = json.load(f)
+        self.field2radec = {int(k): v for k, v in field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
         with open(cfg.get('paths.FIELD2NAME'), 'r') as f:
@@ -133,6 +132,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             # self.field2nvisits = json.load(f)
 
         # Process dataframe to add columns for pointing features
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
+        df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
+        df = self._drop_rows(df)
         df = self._process_dataframe(
             df, 
             specific_years=cfg.get('experiment.data.specific_years') if specific_years is None else specific_years, 
@@ -264,11 +266,21 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         df = df[~nights_to_remove_mask]
         return df
 
+    def _drop_rows(self, df):
+        # Remove observations in 1970 - what are these?
+        df = df[df['night'].dt.year != 1970]
+        assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
+
+        # Remove specific nights according to object name
+        df = self._remove_specific_nights(objects_to_remove=self.objects_to_remove, df=df)
+        
+        # Some fields are mis-labelled - add '(outlier)' to these object names so that they are treated as separate fields
+        df = self._relabel_mislabelled_objects(df)
+        return df
+
     def _process_dataframe(self, df, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
         """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
-        df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
-        df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
 
         # Get observations for specific years, days, filters, etc.
         if specific_years is not None:
@@ -279,16 +291,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             df = df[df['night'].dt.day.isin(specific_days)]
         if specific_filters is not None:
             df = df[df['filter'].isin(specific_filters)]
-        
-        # Remove observations in 1970 - what are these?
-        df = df[df['night'].dt.year != 1970]
-        assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
-
-        # Remove specific nights according to object name
-        df = self._remove_specific_nights(objects_to_remove=self.objects_to_remove, df=df)
-        
-        # Some fields are mis-labelled - add '(outlier)' to these object names so that they are treated as separate fields
-        df = self._relabel_mislabelled_objects(df)
 
         # Add timestamp col
         utc = pd.to_datetime(df['datetime'], utc=True)
@@ -392,14 +394,17 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
         return pointing_features, next_pointing_features
         
-    def _construct_bin_features(self, timestamps, datetimes, remove_large_time_diffs, next_state_idxs=None):
+    def _construct_bin_features(self, df, datetimes, remove_large_time_diffs, next_state_idxs=None):
         # These timestamps already have zenith -- they were already constructed when calculating zeniths for pointing features
         # Create empty arrays 
+        timestamps=df['timestamp'].values
         hour_angles = np.empty(shape=(len(timestamps), len(self.hpGrid.idx_lookup)))
         airmasses = np.empty_like(hour_angles)
         moon_dists = np.empty_like(hour_angles)
         xs = np.empty_like(hour_angles) # xs = az if actions are in ra, dec
         ys = np.empty_like(hour_angles) # ys = dec if actions are in az, el
+        num_visits = np.zeros_like(hour_angles, dtype=np.int32)
+        num_visits_tracking = np.zeros_like(hour_angles[0])
 
         lon, lat = self.hpGrid.lon, self.hpGrid.lat
         for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating bin features for all healpix bins and timestamps'):
@@ -410,8 +415,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 xs[i], ys[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
             else:
                 xs[i], ys[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
+            if df.iloc[i]['object'] != 'zenith':
+                bin_num = df.iloc[i]['bin']
+                num_visits_tracking[bin_num] += 1
+            num_visits[i] = num_visits_tracking.copy()
 
-        stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys], axis=2) # Order must be exactly same as base_bin_feature_names
+        stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys, num_visits], axis=2) # Order must be exactly same as base_bin_feature_names
         bin_states = stacked.reshape(len(hour_angles), -1)
         bin_df = pd.DataFrame(data=bin_states, columns=self.base_bin_feature_names)
         bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
@@ -459,7 +468,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         if remove_large_time_diffs:
             pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
             if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'].values, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+                bin_features, next_bin_features = self._construct_bin_features(df=df, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
                 self.bin_features = bin_features
                 self.next_bin_features = next_bin_features
                 states = np.concatenate((pointing_features, bin_features), axis=1)
@@ -469,7 +478,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         else:
             pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=remove_large_time_diffs)
             if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(timestamps=df['timestamp'].values, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs)
+                bin_features, next_bin_features = self._construct_bin_features(df=df, datetimes=df['datetime'], remove_large_time_diffs=remove_large_time_diffs)
                 self.bin_features = bin_features
                 self.next_bin_features = next_bin_features
                 states = np.concatenate((pointing_features, bin_features), axis=1)
