@@ -1,0 +1,63 @@
+{
+    "feature_names": {
+        "TIME_DEPENDENT_FEATURE_NAMES": ["az", "el", "ha", "time_fraction_since_start"],
+        "CYCLICAL_FEATURE_NAMES": ["ra", "az", "ha"],
+        "MAX_NORM_FEATURE_NAMES": ["el", "dec"],
+        "DEFAULT_BIN_FEATURE_NAMES": ["ha", "airmass", "ang_dist_to_moon"],
+        "DEFAULT_PNTG_FEATURE_NAMES": ["ra", "dec", "az", "el", "airmass", "ha", "sun_ra", "sun_dec", "sun_az", "sun_el", "moon_ra", "moon_dec", "moon_az", "moon_el", "time_fraction_since_start"]
+    },
+    "paths": {
+        "DFITS": "../data/decam-exposures-20251211.fits",
+        "DJSON": "../data/decam-exposures-20251211.json",
+        "FIELD2RADEC": "../data/field2radec.json",
+        "FIELD2NAME": "../data/field2name.json",
+        "FIELD2NVISITS": null
+    },
+    "experiment": {
+        "metadata": {
+            "exp_name": "test_experiment",
+            "parent_results_dir": "../experiment_results/",
+            "seed": 10
+        },
+        "data": {
+            "remove_large_time_diffs": true,
+            "do_cyclical_norm": true,
+            "do_max_norm": true,
+            "do_inverse_norm": true,
+            "include_bin_features": false,
+            "include_default_features": true,
+            "binning_method": "healpix",
+            "nside": 16,
+            "bin_space": "radec",
+            "specific_years": null,
+            "specific_months": null,
+            "specific_days": null,
+            "specific_filters": null,
+            "num_bins_1d": null,
+            "additional_pointing_features": [],
+            "additional_bin_features": [],
+            "objects_to_remove": ["guide", "DES vvds", "J0'", "gwh", "DESGW", "Alhambra-8", "cosmos", "COSMOS hex", "TMO", "LDS", "WD0", "DES supernova hex", "NGC", "ec"]
+        },
+        "algorithm": {
+            "algorithm_name": "BC",
+            "loss_function": "cross_entropy",
+            "tau": 0.005,
+            "gamma": 0.99,
+            "activation_function": "relu"
+        },
+        "training": {
+            "max_epochs": 10,
+            "hidden_dim": 1024,
+            "lr": 0.003,
+            "batch_size": 1024,
+            "patience": 50,
+            "num_workers": 4,
+            "use_train_as_val": false,
+            "lr_scheduler": null,
+            "lr_scheduler_num_epochs": 10,
+            "lr_scheduler_epoch_start": 0,
+            "eta_min": 0.00005
+        }
+
+    }
+}
