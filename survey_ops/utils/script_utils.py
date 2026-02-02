@@ -42,7 +42,7 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
         'activation': activation
     }
         
-    if algorithm_name == 'ddqn' or algorithm_name == 'dqn':
+    if algorithm_name == 'DDQN' or algorithm_name == 'DQN':
         assert gamma is not None, "Gamma (discount factor) must be specified for DDQN."
         assert tau is not None, "Tau (target network update rate) must be specified for DDQN."
         # assert loss_fxn in ['mse', 'huber'], "DDQN only supports mse or huber loss functions."
@@ -69,7 +69,7 @@ def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_action
             **model_hyperparams
         )
 
-    elif algorithm_name == 'behavior_cloning':
+    elif algorithm_name == 'BC':
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
         elif loss_fxn == 'cross_entropy':
@@ -147,41 +147,40 @@ def load_raw_data_to_dataframe(fits_path, json_path):
         selected_d = d[sel]
         column_names = selected_d.dtype.names
         df = pd.DataFrame(selected_d, columns=column_names)
-        df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
     return df
 
-def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
-    # Save timestamps, field_ids, and bin numbers
-    _timestamps = eval_metrics['ep-0']['timestamp'] \
-                if len(eval_metrics['ep-0']['timestamp']) > len(pd_group['timestamp']) \
-                else pd_group['timestamp'] 
-    eval_field_schedule = {
-        'time': _timestamps,
-        'field_id': eval_metrics['ep-0']['field_id']
-    }
+# def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
+#     # Save timestamps, field_ids, and bin numbers
+#     _timestamps = eval_metrics['ep-0']['timestamp'] \
+#                 if len(eval_metrics['ep-0']['timestamp']) > len(pd_group['timestamp']) \
+#                 else pd_group['timestamp'] 
+#     eval_field_schedule = {
+#         'time': _timestamps,
+#         'field_id': eval_metrics['ep-0']['field_id']
+#     }
     
-    expert_field_schedule = {
-        'time': _timestamps,
-        'field_id': pd_group['field_id'].values
-    }
+#     expert_field_schedule = {
+#         'time': _timestamps,
+#         'field_id': pd_group['field_id'].values
+#     }
     
-    bin_schedule = {
-        'time': _timestamps,
-        'policy_bin_id': eval_metrics['ep-0']['bin'].astype(np.int32),
-        'bin_id': pd_group['bin'].values
-    }
+#     bin_schedule = {
+#         'time': _timestamps,
+#         'policy_bin_id': eval_metrics['ep-0']['bin'].astype(np.int32),
+#         'bin_id': pd_group['bin'].values
+#     }
     
-    if not os.path.exists(outdir):
-        os.makedirs(outdir)
-    for data, filename in zip(
-        [expert_field_schedule, eval_field_schedule, bin_schedule],
-        ['expert_field_schedule.csv', 'new_field_schedule.csv', 'bin_schedule.csv']
-        ):
-        series_data = {key: pd.Series(value) for key, value in data.items()}
-        _df = pd.DataFrame(series_data)
-        if 'bin' in filename:
-            _df['policy_bin_id'] = _df['policy_bin_id'].fillna(0).astype('Int64')
-            _df['bin_id'] = _df['bin_id'].fillna(0).astype('Int64')
-        output_filepath = outdir + f'_{date_str}' + filename
-        with open(output_filepath, 'w') as f:
-            _df.to_csv(f, index=False)
+#     if not os.path.exists(outdir):
+#         os.makedirs(outdir)
+#     for data, filename in zip(
+#         [expert_field_schedule, eval_field_schedule, bin_schedule],
+#         ['expert_field_schedule.csv', 'new_field_schedule.csv', 'bin_schedule.csv']
+#         ):
+#         series_data = {key: pd.Series(value) for key, value in data.items()}
+#         _df = pd.DataFrame(series_data)
+#         if 'bin' in filename:
+#             _df['policy_bin_id'] = _df['policy_bin_id'].fillna(0).astype('Int64')
+#             _df['bin_id'] = _df['bin_id'].fillna(0).astype('Int64')
+#         output_filepath = outdir + f'_{date_str}' + filename
+#         with open(output_filepath, 'w') as f:
+#             _df.to_csv(f, index=False)

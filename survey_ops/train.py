@@ -14,6 +14,7 @@ from survey_ops.src.agents import Agent
 from survey_ops.src.algorithms import DDQN, BehaviorCloning
 from survey_ops.utils.script_utils import setup_logger, get_device, load_raw_data_to_dataframe, setup_algorithm
 from survey_ops.src.offline_dataset import OfflineDECamDataset
+from survey_ops.utils.config import Config
 
 import argparse
 import logging
@@ -62,6 +63,7 @@ def plot_metrics(results_outdir):
 def main():
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--config_file', type=str, help="Path to config file. If passed, all other arguments are ignored")
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
     
     # Data input and output file and dir setups
@@ -78,7 +80,7 @@ def main():
     parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
 
     # Data selection and setup
-    parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or grid)')
+    parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or uniform)')
     parser.add_argument('--nside', type=int, default=16, help='Healpix nside parameter (only used if binning_method is healpix)')
     parser.add_argument('--bin_space', type=str, default='radec', help='Binning space to use (azel or radec)')
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the dataset')
@@ -86,7 +88,6 @@ def main():
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
     # parser.add_argument('--include_default_features', action='store_true', help='Whether to include default features in the dataset')
     parser.add_argument('--include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
-    # parser.add_argument('--do_z_score_norm', action='store_true', help='Whether to apply z-score normalization to the features')
     parser.add_argument('--do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
     parser.add_argument('--do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
     parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
@@ -107,19 +108,35 @@ def main():
     
     # Parse arguments
     args = parser.parse_args()
-    args_dict = vars(args)
 
-    # assert errors dne before running rest of code
-    if args.lr_scheduler is not None:
-        assert args.max_epochs - args.lr_scheduler_epoch_start - args.lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
+    if args.config_file:
+        print(args.config_file)
+        cfg = Config(args.config_file)
+        parent_results_dir = cfg.get('experiment.metadata.parent_results_dir')
+        exp_name = cfg.get('experiment.metadata.exp_name')
+    else:
+        # Set up results directory to save outputs
+        parent_results_dir = args.parent_results_dir
+        exp_name = args.exp_name
+        cfg = Config.from_dict(vars(args))
 
-    # Set up results directory to save outputs
-    results_outdir = args.parent_results_dir + args.exp_name + '/'
+    results_outdir = parent_results_dir + exp_name + '/'
     fig_outdir = results_outdir + 'figures/'
     if not os.path.exists(results_outdir):
         os.makedirs(results_outdir)
     if not os.path.exists(fig_outdir):
         os.makedirs(fig_outdir)
+
+    # Get training configs used more than once
+    batch_size = cfg.get('experiment.training.batch_size')
+    max_epochs = cfg.get('experiment.training.max_epochs')
+    lr_scheduler = cfg.get('experiment.training.lr_scheduler')
+    lr_scheduler_epoch_start = cfg.get('experiment.training.lr_scheduler_epoch_start')
+    lr_scheduler_num_epochs = cfg.get('experiment.training.lr_scheduler_num_epochs')
+    
+    # assert errors dne before running rest of code
+    if lr_scheduler is not None:
+        assert max_epochs - lr_scheduler_epoch_start - lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
 
     # Set up logging
     logger = setup_logger(save_dir=results_outdir, logging_filename='training.log')
@@ -130,51 +147,32 @@ def main():
     logging.getLogger("fontconfig").setLevel(logging.WARNING)
     logging.getLogger("cartopy").setLevel(logging.WARNING)
 
-
     logger.info("Saving results in " + results_outdir)
-
-    # Print args
-    logger.info("Experiment parameters:")
-    for key, value in args_dict.items():
-        logger.info(f"{key}: {value}")
 
     # Seed everything
     pytorch_utils.seed_everything(args.seed)
-    # torch.set_default_dtype(torch.float32)
 
     device = get_device()
 
     logger.info("Loading raw data...")
-    raw_data_df = load_raw_data_to_dataframe(args.fits_path, args.json_path)
-
-    # Save these args for test data arguments in eval.py
-    OFFLINE_DATASET_CONFIG = {
-        'binning_method': args.binning_method,
-        'nside': args.nside,
-        'bin_space': args.bin_space,
-        'include_default_features': True,
-        'include_bin_features': args.include_bin_features,
-        'do_cyclical_norm': args.do_cyclical_norm,
-        'do_max_norm': args.do_max_norm,
-        'do_inverse_airmass': args.do_inverse_airmass,
-        'calculate_action_mask': 'dqn' in args.algorithm_name,
-        'remove_large_time_diffs': args.remove_large_time_diffs
-    }
-    
-    logger.debug(f'Offline dataset config: {OFFLINE_DATASET_CONFIG}')
+    raw_data_df = load_raw_data_to_dataframe(cfg.get('paths.DFITS'), cfg.get('paths.DJSON'))
 
     logger.info("Processing raw data into OfflineDataset()...")
     train_dataset = OfflineDECamDataset(
         df=raw_data_df,
-        specific_years=args.specific_years, 
-        specific_months=args.specific_months, 
-        specific_days=args.specific_days,
-        **OFFLINE_DATASET_CONFIG
+        cfg=cfg
         )
     logger.info("Finished constructing train_dataset")
 
-    assert args.batch_size 
-    
+    # Save (or update) config file after updating 
+    nside = cfg.get('experiment.data.nside')
+    cfg.set("paths.BIN2FIELDS_IN_BIN", f'../data/nside{nside}_bin2fields_in_bin.json')
+    cfg.set("paths.self", results_outdir + "config.json")
+    cfg.set("paths.outdir", results_outdir)
+    cfg.set("experiment.data.obs_dim", train_dataset.obs_dim)
+    cfg.set("experiment.data.num_actions", train_dataset.num_actions)
+    cfg.save(cfg.get('paths.self'))
+
     # Plot bin membership for fields in ra vs dec
     colors = [f'C{i}' for i in range(7)]
     for i, (bin_id, g) in enumerate(train_dataset._df.groupby('bin')):
@@ -202,31 +200,29 @@ def main():
     fig.tight_layout()
     fig.savefig(fig_outdir + 'train_data_pointing_feature_distributions.png')
         
-    with open(results_outdir + 'offline_dataset_config.pkl', 'wb') as f:
-        pickle.dump(OFFLINE_DATASET_CONFIG, f)
-    
-    if args.use_train_as_val:
-        trainloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=False)
+    if cfg.get('experiment.training.use_train_as_val'):
+        trainloader = train_dataset.get_dataloader(batch_size, num_workers=cfg.get('experiment.training.num_workers'), pin_memory=True if device.type == 'cuda' else False, random_seed=cfg.get('experiment.metadata.seed'), return_train_and_val=False)
         valloader = trainloader
     else:
-        trainloader, valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=True)
+        trainloader, valloader = train_dataset.get_dataloader(batch_size, num_workers=cfg.get('experiment.training.num_workers'), pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=True)
 
     # valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=np.random.randint(low=0, high=10000))
 
     # Initialize algorithm and agent
     logger.info("Initializing agent...")
 
-    steps_per_epoch = np.max([int(len(trainloader.dataset) // args.batch_size), 1])
-    logger.debug(f'{len(trainloader.dataset)} // {args.batch_size}')
-    num_lr_scheduler_steps = np.max([1, int(args.lr_scheduler_num_epochs * steps_per_epoch)])
-    logger.debug(f'lr_scheduler_num_epochs {args.lr_scheduler_num_epochs} * {steps_per_epoch}')
-    lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': args.eta_min} if args.lr_scheduler == 'cosine_annealing' else {}
-    logger.debug(f'lr_scheduler_kwargs {lr_scheduler_kwargs}')
+    steps_per_epoch = np.max([int(len(trainloader.dataset) // batch_size), 1])
+    logger.debug(f'{len(trainloader.dataset)} // {batch_size}')
+    num_lr_scheduler_steps = np.max([1, int(lr_scheduler_num_epochs * steps_per_epoch)])
+    logger.debug(f'lr_scheduler_num_epochs {lr_scheduler_num_epochs} * {steps_per_epoch}')
+    lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': cfg.get('experiment.training.eta_min')} if args.lr_scheduler == 'cosine_annealing' else {}
 
-    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=args.algorithm_name, obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, \
-                                loss_fxn=args.loss_function, hidden_dim=args.hidden_dim, lr=args.lr, lr_scheduler=args.lr_scheduler, device=device, \
-                                lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=args.lr_scheduler_epoch_start, \
-                                lr_scheduler_num_epochs=args.lr_scheduler_num_epochs, gamma=args.gamma, tau=args.tau, activation=args.activation)
+    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
+                                obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg.get('experiment.algorithm.loss_function'),
+                                hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), lr_scheduler=lr_scheduler, 
+                                device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 
+                                lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg.get('experiment.algorithm.gamma'), 
+                                tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
 
     agent = Agent(
         algorithm=algorithm,
@@ -237,11 +233,11 @@ def main():
     # Train agent
     start_time = time.time()
     agent.fit(
-        num_epochs=args.max_epochs,
+        num_epochs=max_epochs,
         trainloader=trainloader,
         valloader=valloader,
-        batch_size=args.batch_size,
-        patience=args.patience,
+        batch_size=batch_size,
+        patience=cfg.get('experiment.training.patience'),
     )
     end_time = time.time()
     logger.info(f'Total train time = {end_time - start_time}s on {device}')
