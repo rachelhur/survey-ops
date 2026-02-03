@@ -20,7 +20,7 @@ from survey_ops.utils.sys_utils import setup_logger, get_device
 from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe
 from survey_ops.coreRL.environments import OfflineEnv
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
-from survey_ops.utils.config import Config
+from survey_ops.utils.config import Config, save_config, load_global_config, dict_to_nested
 import logging
 logger = logging.getLogger(__name__)
 
@@ -29,19 +29,12 @@ import argparse
 
 from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parents[2] 
-DATA_DIR = PROJECT_ROOT / "data"
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 
 def save_schedule(eval_metrics, pd_group, save_dir, night_idx, make_gifs=True, nside=None, is_azel=False, whole=False, bin2pos_filepath=None, field2radec_filepath=None):
     # Save timestamps, field_ids, and bin numbers
     bin_space = 'azel' if is_azel else 'radec'
     assert os.path.exists(save_dir)
-
-    with open(bin2pos_filepath) as f:
-        bin2pos = json.load(f)
-    with open(field2radec_filepath) as f:
-        field2radec = json.load(f)
-
 
     eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
     expert_timestamps = pd_group['timestamp'].values
@@ -207,27 +200,26 @@ def main():
     parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the test dataset')
     parser.add_argument('--specific_months', type=int, nargs='*', default=None, help='Specific months to include in the test dataset')
     parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the test dataset')
+    parser.add_argument('--specific_filters', type=str, nargs='*', default=None, help='Specific days to include in the test dataset')
     parser.add_argument('--logging_level', type=str, default='info', help='Logging level. Options: info, debug')
     parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
     parser.add_argument('--json_path', type=str, default='../data/decam-exposures-20251211.json', help='Path to offline dataset metadata json file')
 
     # Evaluation hyperparameters
     parser.add_argument('--num_episodes', type=int, default=1, help='Number of evaluation episodes to run')
+    
 
     # Parse args
     args = parser.parse_args()
     args_dict = vars(args)
 
-    # Set up results directory to save outputs
-    cfg = Config(args.trained_model_dir + 'config.json')
+    # Get configs
+    global_cfg = load_global_config(PROJECT_ROOT / 'configs' / 'global_config.json')
+    config_path = Path(args.trained_model_dir) / "config.json"
+    with open(config_path, "r") as f:
+        cfg = json.load(f)
 
-    # Set up output directories
-    SCRIPT_DIR = Path(__file__).resolve().parent
-    PROJECT_ROOT = SCRIPT_DIR.parents[1] 
-    DATA_DIR = PROJECT_ROOT / "data"
-    LOOKUP_DIR = DATA_DIR / "lookups"
-
-    results_outdir = cfg.get('experiment.metadata.outdir') + '/' + args.evaluation_name + '/'
+    results_outdir = cfg['metadata']['outdir'] + '/' + args.evaluation_name + '/'
     if not os.path.exists(results_outdir):
         os.makedirs(results_outdir)
 
@@ -249,19 +241,24 @@ def main():
 
     # Seed everything
     seed_everything(args.seed)
-    # torch.set_default_dtype(torch.float32)
 
     device = get_device()
     logger.info("Loading raw data...")
-    raw_data_df = load_raw_data_to_dataframe(DATA_DIR / cfg.get('paths.DFITS'), DATA_DIR / cfg.get('paths.DJSON'))
-    logger.info("Processing raw data into OfflineDataset()...")
+    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECFITS']), 
+                                    Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECJSON']))
     
-    nside = cfg.get('experiment.data.nside')
+    nside = cfg['data']['nside']
 
     logger.info("Loading test dataset with same config as training dataset...")
-    test_dataset = OfflineDECamDataset(raw_data_df, cfg=cfg, 
-                                       specific_years=args.specific_years, specific_months=args.specific_months, specific_days=args.specific_days,
-                                       ) 
+    test_dataset = OfflineDECamDataset(
+        df=df,
+        cfg=cfg,
+        glob_cfg=global_cfg,
+        specific_years=args.specific_years,
+        specific_months=args.specific_months,
+        specific_days=args.specific_days,
+        specific_filters=args.specific_filters
+        ) 
         
     # Plot State x action space via cornerplot
     corner_plot = sns.pairplot(test_dataset._df,
@@ -272,14 +269,13 @@ def main():
     corner_plot.figure.savefig(results_outdir + 'state_times_action_space_corner_plot.png')
 
     logger.info("Setting up agent...")
-    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
-                            obs_dim=cfg.get('experiment.data.obs_dim'), num_actions=cfg.get('experiment.data.num_actions'), loss_fxn=cfg.get('experiment.algorithm.loss_function'),
-                            hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), 
-                            lr_scheduler=cfg.get('experiment.training.lr_scheduler'), device=device, 
-                            lr_scheduler_kwargs=cfg.get('experiment.training.lr_scheduler_kwargs'), 
-                            lr_scheduler_epoch_start=cfg.get('experiment.training.lr_scheduler_epoch_start'), 
-                            lr_scheduler_num_epochs=cfg.get('experiment.training.lr_scheduler_num_epochs'), gamma=cfg.get('experiment.algorithm.gamma'), 
-                            tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
+    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg['model']['algorithm'], 
+                                obs_dim=cfg['data']['obs_dim'], num_actions=cfg['data']['num_actions'], loss_fxn=cfg['model']['loss_function'],
+                                hidden_dim=cfg['train']['hidden_dim'], lr=cfg['train']['lr'], lr_scheduler=cfg['train']['lr_scheduler'], 
+                                device=device, lr_scheduler_kwargs=cfg['train']['lr_scheduler_kwargs'], lr_scheduler_epoch_start=cfg['train']['lr_scheduler_epoch_start'], 
+                                lr_scheduler_num_epochs=cfg['train']['lr_scheduler_num_epochs'], gamma=cfg['model']['gamma'], 
+                                tau=cfg['model']['tau'], activation=cfg['model']['activation'])
+
     agent = Agent(
         algorithm=algorithm,
         train_outdir=args.trained_model_dir,
@@ -296,11 +292,11 @@ def main():
 
     # Creat env
     pointing_pd_nightgroup = test_dataset._df.groupby('night')
-    if cfg.get('experiment.data.include_bin_features'):
+    if cfg['data']['include_bin_features']:
         bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
     else:
         bin_pd_nightgroup = None
-    env = gym.make(id=f"gymnasium_env/{env_name}", cfg=cfg, max_nights=None, pointing_pd_nightgroup=pointing_pd_nightgroup, bin_pd_nightgroup=bin_pd_nightgroup)
+    env = gym.make(id=f"gymnasium_env/{env_name}", cfg=cfg, glob_cfg=global_cfg, max_nights=None, pointing_pd_nightgroup=pointing_pd_nightgroup, bin_pd_nightgroup=bin_pd_nightgroup)
 
     # Plot predicted action for each state
     with torch.no_grad():
@@ -310,7 +306,8 @@ def main():
     # Sequence of actions from target (original schedule) and policy
     target_sequence = test_dataset.actions.detach().numpy()
     eval_sequence = eval_actions
-    first_night_indices = np.where(test_dataset.states[:, -1] == 0)
+    time_idx = np.where(np.array(test_dataset.state_feature_names) == 'time_fraction_since_start')[0]
+    first_night_indices = np.where(test_dataset.states[:, time_idx] == 0)[0]
 
     fig, axs = plt.subplots(2, figsize=(10,5), sharex=True)
     
@@ -334,8 +331,10 @@ def main():
 
     logger.info("Generating evaluation plots...")
 
-    bin2pos_filepath = cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.BIN2COORDS')
-    field2radec_filepath = cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2RADEC')
+    bin2pos_filepath = global_cfg['paths']['LOOKUP_DIR'] + '/' + f"nside{nside}_bin2{cfg['data']['bin_space']}.json"
+    field2radec_filepath = global_cfg['paths']['LOOKUP_DIR'] + '/' + global_cfg['files']['FIELD2RADEC']
+    with open(field2radec_filepath, 'r') as f:
+        FIELD2RADEC = json.load(f)
 
     ep_num = 0
     
@@ -391,8 +390,8 @@ def main():
         eval_bin_radecs = np.array([bin2coord[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
         orig_bin_radecs = np.array([bin2coord[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
         
-        eval_field_radecs = np.array([test_dataset.field2radec[field_id] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
-        orig_field_radecs = np.array([test_dataset.field2radec[field_id] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
+        eval_field_radecs = np.array([FIELD2RADEC[str(field_id)] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
+        orig_field_radecs = np.array([FIELD2RADEC[str(field_id)] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
         
         if len(orig_field_radecs) != 1:
             # Plot bins

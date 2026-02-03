@@ -264,14 +264,13 @@ class Agent:
         episode_rewards = []
         eval_metrics = {}
 
-        if cfg.get('experiment.data.bin_space') == 'radec':
+        if cfg['data']['bin_space'] == 'radec':
             get_fields_in_bin = get_fields_in_radec_bin
         else:
             get_fields_in_bin = get_fields_in_azel_bin
         field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
         bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
-        hpGrid = None if cfg.get('experiment.data.binning_method') != 'healpix' else ephemerides.HealpixGrid(nside=cfg.get('experiment.data.nside'), is_azel=(cfg.get('experiment.data.bin_space') == 'azel'))
-
+        hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=cfg['data']['nside'], is_azel=(cfg['data']['bin_space'] == 'azel'))
 
         with logging_redirect_tqdm():
             for episode in tqdm(range(num_episodes)):

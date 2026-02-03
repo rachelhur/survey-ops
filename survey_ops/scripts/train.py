@@ -13,16 +13,15 @@ from survey_ops.algorithms.factory import setup_algorithm
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
 from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe 
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
-from survey_ops.utils.config import Config
+from survey_ops.utils.config import Config, save_config, load_global_config, dict_to_nested
 
 import argparse
 import logging
+import json
 
 from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1] 
-DATA_DIR = PROJECT_ROOT / "data"
-LOOKUP_DIR = DATA_DIR / "lookups"
 
 def plot_metrics(results_outdir):
     with open(results_outdir / 'train_metrics.pkl', 'rb') as f:
@@ -64,84 +63,81 @@ def plot_metrics(results_outdir):
     fig.tight_layout()
     fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')
 
-def main():
-
+def get_args():
+    parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--config_file', type=str, help="Path to config file. If passed, all other arguments are ignored")
-    parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
+    parser.add_argument('--config', type=str, default=None, help="Path to config file. If passed, all other arguments are ignored")
     
     # Data input and output file and dir setups
     parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
     parser.add_argument('--json_path', type=str, default='../data/decam-exposures-20251211.json', help='Path to offline dataset metadata json file')
-    parser.add_argument('--parent_results_dir', type=str, default='../experiment_results/', help='Name (not path) of results directory')
-    parser.add_argument('--exp_name', type=str, default='test_experiment', help='Name of the experiment -- used to create the subdir in parents_results_dir')
+    parser.add_argument('--metadata.parent_results_dir', type=str, default='experiment_results', help='Name (not path) of results directory')
+    parser.add_argument('--metadata.exp_name', type=str, default='test_experiment', help='Name of the experiment -- used to create the subdir in parents_results_dir')
+    parser.add_argument('--metadata.seed', type=int, default=10, help='Random seed for reproducibility')
     
     # Algorithm setup
-    parser.add_argument('--algorithm_name', type=str, default='ddqn', help='Algorithm to use for training (DDQN or BC)')
-    parser.add_argument('--loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
-    parser.add_argument('--tau', type=float, default=0.005, help='Target network update rate for DDQN')
-    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor for DDQN')
-    parser.add_argument('--activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
+    parser.add_argument('--model.algorithm', type=str, default='ddqn', help='Algorithm to use for training (DDQN or BC)')
+    parser.add_argument('--model.loss_function', type=str, default='cross_entropy', help='Loss function. Options: mse, cross_entropy, huber, mse')
+    parser.add_argument('--model.tau', type=float, default=0.005, help='Target network update rate for DDQN')
+    parser.add_argument('--model.gamma', type=float, default=0.99, help='Discount factor for DDQN')
+    parser.add_argument('--model.activation', type=str, default='relu', help='The activation function to use in the neural network. Options: relu, mish, swish ')
 
     # Data selection and setup
-    parser.add_argument('--binning_method', type=str, default='healpix', help='Binning method to use (healpix or uniform)')
-    parser.add_argument('--nside', type=int, default=16, help='Healpix nside parameter (only used if binning_method is healpix)')
-    parser.add_argument('--bin_space', type=str, default='radec', help='Binning space to use (azel or radec)')
-    parser.add_argument('--specific_years', type=int, nargs='*', default=None, help='Specific years to include in the dataset')
-    parser.add_argument('--specific_months', type=int, nargs='*', default=None, help='Specific months to include in the dataset')
-    parser.add_argument('--specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
+    parser.add_argument('--data.bin_method', type=str, default='healpix', help='Binning method to use (healpix or uniform)')
+    parser.add_argument('--data.nside', type=int, default=16, help='Healpix nside parameter (only used if binning_method is healpix)')
+    parser.add_argument('--data.num_bins_1d', type=int, default=16, help='Number of bins in 1dim (only used if binning_method is uniform)')
+    parser.add_argument('--data.bin_space', type=str, default='radec', help='Binning space to use (azel or radec)')
+    parser.add_argument('--data.specific_years', type=int, nargs='*', default=None, help='Specific years to include in the dataset')
+    parser.add_argument('--data.specific_months', type=int, nargs='*', default=None, help='Specific months to include in the dataset')
+    parser.add_argument('--data.specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
+    parser.add_argument('--data.specific_filters', type=str, nargs='*', default=None, help='Specific filters to include in the dataset')
     # parser.add_argument('--include_default_features', action='store_true', help='Whether to include default features in the dataset')
-    parser.add_argument('--include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
-    parser.add_argument('--do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
-    parser.add_argument('--do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
-    parser.add_argument('--do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
-    parser.add_argument('--remove_large_time_diffs', action='store_true', help='New method of calculating transitions which removes any transitions with time difference greater than 10 min')
+    parser.add_argument('--data.include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
+    parser.add_argument('--data.do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
+    parser.add_argument('--data.do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
+    parser.add_argument('--data.do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
+    parser.add_argument('--data.remove_large_time_diffs', action='store_true', help='New method of calculating transitions which removes any transitions with time difference greater than 10 min')
+    parser.add_argument('--data.additional_bin_features', type=str, nargs='*', default=[], help='Other bin feautures to include')
+    parser.add_argument('--data.additional_pointing_features', type=str, nargs='*', default=[], help='Other pointing feautures to include')
 
     # Training hyperparameters
-    parser.add_argument('--max_epochs', type=float, default=10, help='Maximum number of passes through train dataset')
-    parser.add_argument('--batch_size', type=int, default=1024, help='Training batch size')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
-    parser.add_argument('--use_train_as_val', action='store_true', help='Instead of using validation samples during training, use the training samples')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default=None, help='cosine_annealing or None')
-    parser.add_argument('--lr_scheduler_num_epochs', type=int, default=0, help='Number of epochs to reach min lr (must be less than num_epochs)')
-    parser.add_argument('--lr_scheduler_epoch_start', type=int, default=100, help='Epoch at which to start lr scheduler')
-    parser.add_argument('--eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
-    parser.add_argument('--hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
-    parser.add_argument('--patience', type=int, default=0, help='Early stopping patience (in epochs). If 0, patience will not be used.')
+    parser.add_argument('--train.max_epochs', type=float, default=10, help='Maximum number of passes through train dataset')
+    parser.add_argument('--train.batch_size', type=int, default=1024, help='Training batch size')
+    parser.add_argument('--train.num_workers', type=int, default=4, help='Number of data loader workers')
+    parser.add_argument('--train.use_train_as_val', action='store_true', help='Instead of using validation samples during training, use the training samples')
+    parser.add_argument('--train.lr', type=float, default=1e-3, help='Learning rate')
+    parser.add_argument('--train.lr_scheduler', type=str, default=None, help='cosine_annealing or None')
+    parser.add_argument('--train.lr_scheduler_num_epochs', type=int, default=0, help='Number of epochs to reach min lr (must be less than num_epochs)')
+    parser.add_argument('--train.lr_scheduler_epoch_start', type=int, default=100, help='Epoch at which to start lr scheduler')
+    parser.add_argument('--train.eta_min', type=float, default=1e-5, help='Minimum learning rate for cosine annealing scheduler')
+    parser.add_argument('--train.hidden_dim', type=int, default=1024, help='Hidden dimension size for the model')
+    parser.add_argument('--train.patience', type=int, default=0, help='Early stopping patience (in epochs). If 0, patience will not be used.')
     
-    # Parse arguments
     args = parser.parse_args()
 
-    if args.config_file:
-        print(args.config_file)
-        cfg = Config(args.config_file)
-        parent_results_dir = PROJECT_ROOT / cfg.get('experiment.metadata.parent_results_dir')
-        exp_name = cfg.get('experiment.metadata.exp_name')
-    else:
-        # Set up results directory to save outputs
-        parent_results_dir = PROJECT_ROOT / args.parent_results_dir
-        exp_name = args.exp_name
-        cfg = Config.from_dict(vars(args))
+    # If a config file is passed, overwrite the argparse defaults
+    if args.config is not None:
+        assert Path(args.config).exists(), f"Config file at {args.config} does not exist."
+            
+        with open(args.config, 'r') as f:
+            file_conf = json.load(f)
+            for section, values in file_conf.items():
+                if isinstance(values, dict):
+                    for k, v in values.items():
+                        setattr(args, f"{section}.{k}", v)
+    return args
 
-    results_outdir = parent_results_dir / exp_name
-    fig_outdir = results_outdir / 'figures/'
+def main():
+    args = get_args()
+    cfg = dict_to_nested(vars(args))
+    global_cfg = load_global_config(PROJECT_ROOT / 'configs' / 'global_config.json')
+
+    results_outdir = PROJECT_ROOT / Path(cfg['metadata']['parent_results_dir']) / cfg['metadata']['exp_name']
+    fig_outdir = results_outdir / 'figures'
     if not os.path.exists(results_outdir):
         os.makedirs(results_outdir)
     if not os.path.exists(fig_outdir):
         os.makedirs(fig_outdir)
-
-    # Get training configs used more than once
-    batch_size = cfg.get('experiment.training.batch_size')
-    max_epochs = cfg.get('experiment.training.max_epochs')
-    lr_scheduler = cfg.get('experiment.training.lr_scheduler')
-    lr_scheduler_epoch_start = cfg.get('experiment.training.lr_scheduler_epoch_start')
-    lr_scheduler_num_epochs = cfg.get('experiment.training.lr_scheduler_num_epochs')
-    bin_space = cfg.get('experiment.data.bin_space')
-    
-    # assert errors dne before running rest of code
-    if lr_scheduler is not None:
-        assert max_epochs - lr_scheduler_epoch_start - lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
 
     # Set up logging
     logger = setup_logger(save_dir=results_outdir, logging_filename='training.log')
@@ -151,36 +147,44 @@ def main():
     logging.getLogger("gymnasium").setLevel(logging.WARNING)
     logging.getLogger("fontconfig").setLevel(logging.WARNING)
     logging.getLogger("cartopy").setLevel(logging.WARNING)
+    logger.info(f'Setting outdir {results_outdir}')
+
+    # Get training configs used more than once
+    batch_size = cfg['train']['batch_size'] #cfg.get('experiment.training.batch_size')
+    max_epochs = cfg['train']['max_epochs'] #cfg.get('experiment.training.max_epochs')
+    lr_scheduler = cfg['train']['lr_scheduler'] #cfg.get('experiment.training.lr_scheduler')
+    lr_scheduler_epoch_start = cfg['train']['lr_scheduler_epoch_start'] #cfg.get('experiment.training.lr_scheduler_epoch_start')
+    lr_scheduler_num_epochs = cfg['train']['lr_scheduler_num_epochs'] #cfg.get('experiment.training.lr_scheduler_num_epochs')
+    bin_space = cfg['data']['bin_space'] #cfg.get('experiment.data.bin_space')
+    if bin_space == 'azel':
+        cfg['data']['additional_bin_features'] += ['ra', 'dec']
+    else:
+        cfg['data']['additional_bin_features'] += ['az', 'el']
+    
+    # assert errors dne before running rest of code
+    if lr_scheduler is not None:
+        assert max_epochs - lr_scheduler_epoch_start - lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
 
     logger.info("Saving results in " + str(results_outdir))
 
     # Seed everything
-    seed_everything(args.seed)
+    seed_everything(cfg['metadata']['seed'])
 
     device = get_device()
 
     logger.info("Loading raw data...")
-    raw_data_df = load_raw_data_to_dataframe(DATA_DIR / cfg.get('paths.DFITS'), DATA_DIR / cfg.get('paths.DJSON'))
+
+    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECFITS']), 
+                                    Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECJSON']))
 
     logger.info("Processing raw data into OfflineDataset()...")
     # Need to include paths.lookup_dir in cfg before sending to offline dataset -- brittle
-    cfg.set('paths.lookup_dir', LOOKUP_DIR)
     train_dataset = OfflineDECamDataset(
-        df=raw_data_df,
-        cfg=cfg
+        df=df,
+        cfg=cfg,
+        glob_cfg=global_cfg
         )
     logger.info("Finished constructing train_dataset")
-
-    # Save (or update) config file after updating -- must do after getting dataset
-    nside = cfg.get('experiment.data.nside')
-    cfg.set("paths.BIN2FIELDS_IN_BIN", str(f'nside{nside}_bin2fields_in_bin.json'))
-    cfg.set("paths.BIN2COORDS", str(f'nside{nside}_bin2{bin_space}.json'))
-    cfg.set('paths.lookup_dir', str(LOOKUP_DIR))
-    cfg.set("experiment.metadata.config_path", str(results_outdir  / "config.json"))
-    cfg.set('experiment.metadata.outdir', str(results_outdir))
-    cfg.set("experiment.data.obs_dim", train_dataset.obs_dim)
-    cfg.set("experiment.data.num_actions", train_dataset.num_actions)
-    cfg.save(cfg.get("experiment.metadata.config_path"))
 
     # Plot bin membership for fields in ra vs dec
     colors = [f'C{i}' for i in range(7)]
@@ -209,34 +213,38 @@ def main():
     fig.tight_layout()
     fig.savefig(fig_outdir / 'train_data_pointing_feature_distributions.png')
         
-    if cfg.get('experiment.training.use_train_as_val'):
-        trainloader = train_dataset.get_dataloader(batch_size, num_workers=cfg.get('experiment.training.num_workers'), pin_memory=True if device.type == 'cuda' else False, random_seed=cfg.get('experiment.metadata.seed'), return_train_and_val=False)
+    if cfg['train']['use_train_as_val']:
+        trainloader = train_dataset.get_dataloader(batch_size, num_workers=cfg['train']['num_workers'], pin_memory=True if device.type == 'cuda' else False, random_seed=cfg.get('experiment.metadata.seed'), return_train_and_val=False)
         valloader = trainloader
     else:
-        trainloader, valloader = train_dataset.get_dataloader(batch_size, num_workers=cfg.get('experiment.training.num_workers'), pin_memory=True if device.type == 'cuda' else False, random_seed=args.seed, return_train_and_val=True)
-
-    # valloader = train_dataset.get_dataloader(args.batch_size, num_workers=args.num_workers, pin_memory=True if device.type == 'cuda' else False, random_seed=np.random.randint(low=0, high=10000))
+        trainloader, valloader = train_dataset.get_dataloader(batch_size, num_workers=cfg['train']['num_workers'], pin_memory=True if device.type == 'cuda' else False, random_seed=cfg['metadata']['seed'], return_train_and_val=True)
 
     # Initialize algorithm and agent
     logger.info("Initializing agent...")
 
     steps_per_epoch = np.max([int(len(trainloader.dataset) // batch_size), 1])
-    logger.debug(f'{len(trainloader.dataset)} // {batch_size}')
     num_lr_scheduler_steps = np.max([1, int(lr_scheduler_num_epochs * steps_per_epoch)])
-    logger.debug(f'lr_scheduler_num_epochs {lr_scheduler_num_epochs} * {steps_per_epoch}')
-    lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': cfg.get('experiment.training.eta_min')} if args.lr_scheduler == 'cosine_annealing' else {}
+    lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': cfg['train']['eta_min']} if lr_scheduler == 'cosine_annealing' else {}
 
-    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
-                                obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg.get('experiment.algorithm.loss_function'),
-                                hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), lr_scheduler=lr_scheduler, 
+    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg['model']['algorithm'], 
+                                obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg['model']['loss_function'],
+                                hidden_dim=cfg['train']['hidden_dim'], lr=cfg['train']['lr'], lr_scheduler=lr_scheduler, 
                                 device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 
-                                lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg.get('experiment.algorithm.gamma'), 
-                                tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
+                                lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg['model']['gamma'], 
+                                tau=cfg['model']['tau'], activation=cfg['model']['activation'])
 
     agent = Agent(
         algorithm=algorithm,
         train_outdir=str(results_outdir) + '/',
     )
+
+    # Save (or update) config file after updating
+    cfg['data']['obs_dim'] = train_dataset.obs_dim
+    cfg['data']['num_actions'] = train_dataset.num_actions
+    cfg['metadata']['outdir'] = str(PROJECT_ROOT / cfg['metadata']['parent_results_dir'] / cfg['metadata']['exp_name'])
+    print(lr_scheduler_kwargs.items())
+    cfg['train']['lr_scheduler_kwargs'] = {key: int(val) for key, val in lr_scheduler_kwargs.items()}
+    save_config(config_dict=cfg, outdir=results_outdir)
     logger.info("Starting training...")
 
     # Train agent
@@ -246,7 +254,7 @@ def main():
         trainloader=trainloader,
         valloader=valloader,
         batch_size=batch_size,
-        patience=cfg.get('experiment.training.patience'),
+        patience=cfg['train']['patience'],
     )
     end_time = time.time()
     logger.info(f'Total train time = {end_time - start_time}s on {device}')

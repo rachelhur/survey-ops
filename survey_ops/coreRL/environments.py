@@ -16,6 +16,9 @@ import json
 import logging
 logger = logging.getLogger(__name__)
 
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 
 class BaseTelescope(gym.Env):
     """
@@ -250,7 +253,7 @@ class OfflineEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, cfg, max_nights=None, exp_time=90., slew_time=30., pointing_pd_nightgroup=None, bin_pd_nightgroup=None):
+    def __init__(self, glob_cfg, cfg, max_nights=None, exp_time=90., slew_time=30., pointing_pd_nightgroup=None, bin_pd_nightgroup=None):
         """
         Args
         ----
@@ -263,49 +266,49 @@ class OfflineEnv(BaseTelescope):
         self.exp_time = exp_time
         self.slew_time = slew_time
         self.time_between_obs = exp_time + slew_time
-        self.time_dependent_feature_substrs = cfg.get('feature_names.TIME_DEPENDENT_FEATURE_NAMES')
-        self.cyclical_feature_names = cfg.get('feature_names.CYCLICAL_FEATURE_NAMES')
-        self.do_cyclical_norm = cfg.get('experiment.data.do_cyclical_norm')
-        self.do_max_norm = cfg.get('experiment.data.do_max_norm')
-        self.do_inverse_norm = cfg.get('experiment.data.do_inverse_norm')
-        self.max_norm_feature_names = cfg.get('feature_names.MAX_NORM_FEATURE_NAMES')
-        self.include_bin_features = cfg.get('experiment.data.include_bin_features')
-        self.bin_space = cfg.get('experiment.data.bin_space')
-
-        # Get other configurations
-        binning_method = cfg.get('experiment.data.binning_method')
-        nside = cfg.get('experiment.data.nside')
+        self.time_dependent_feature_substrs = glob_cfg['features']['TIME_DEPENDENT_FEATURE_NAMES']
+        self.cyclical_feature_names = glob_cfg['features']['CYCLICAL_FEATURE_NAMES']
+        self.max_norm_feature_names = glob_cfg['features']['MAX_NORM_FEATURE_NAMES']
+        self.do_cyclical_norm = cfg['data']['do_cyclical_norm']
+        self.do_max_norm = cfg['data']['do_cyclical_norm']
+        self.do_inverse_norm = cfg['data']['do_cyclical_norm']
+        self.include_bin_features = cfg['data']['include_bin_features']
+        self.bin_space = cfg['data']['bin_space']
+        nside = cfg['data']['nside']
+        self.hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
+        self.nbins = len(self.hpGrid.lon)
 
         # Dataset-wide mappings        
-        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2RADEC'), 'r') as f:
+        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2NAME'], 'r') as f:
+            self.field2name = json.load(f)
+        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2RADEC'], 'r') as f:
             field2radec = json.load(f)
-        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2NVISITS'), 'r') as f:
+        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2NVISITS'], 'r') as f:
             field2nvisits = json.load(f)
         self.field2radec = {int(k): v for k, v in field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
-        
-        with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.FIELD2NAME'), 'r') as f:
-            self.field2name = json.load(f)
-        
-        self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
-        self.nbins = len(self.hpGrid.lon)
+
 
         # Bin-space dependent function to get fields in bin
         if not self.hpGrid.is_azel:
-            with open(cfg.get('paths.lookup_dir') + '/' + cfg.get('paths.BIN2FIELDS_IN_BIN'), 'r') as f:
+            with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + f'nside{nside}_bin2fields_in_bin.json', 'r') as f:
                 self.bin2fields_in_bin = json.load(f)
             # self.get_fields_in_bin = get_fields_in_radec_bin
         else:
             # self.get_fields_in_bin = get_fields_in_azel_bin
             self.bin2fields_in_bin = None
 
+
         self.field2nvisits = {int(fid): int(count) for fid, count in field2nvisits.items()}
         self.nfields = len(self.field2nvisits)
 
         self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
-            = setup_feature_names(cfg, hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
-        
+                    = setup_feature_names(include_default_features=True, include_bin_features=cfg['data']['include_bin_features'],
+                                  additional_bin_features=cfg['data']['additional_bin_features'], additional_pointing_features=cfg['data']['additional_pointing_features'],
+                                  default_pntg_feature_names=glob_cfg['features']['DEFAULT_PNTG_FEATURE_NAMES'], cyclical_feature_names=self.cyclical_feature_names,
+                                  default_bin_feature_names=glob_cfg['features']['DEFAULT_BIN_FEATURE_NAMES'],
+                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         self.pointing_pd_nightgroup = pointing_pd_nightgroup
         if self.include_bin_features:
             self.bin_pd_nightgroup = bin_pd_nightgroup
@@ -318,7 +321,7 @@ class OfflineEnv(BaseTelescope):
         # else:
         #     self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
 
-        self.obs_dim = cfg.get('experiment.data.obs_dim')
+        self.obs_dim = cfg['data']['obs_dim']
         self.observation_space = gym.spaces.Box(
             low=-100, #np.min(dataset.obs),
             high=1e8,

@@ -17,4 +17,11 @@ def load_raw_data_to_dataframe(fits_path, json_path):
         selected_d = d[sel]
         column_names = selected_d.dtype.names
         df = pd.DataFrame(selected_d, columns=column_names)
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
+
+        # Add timestamp col
+        utc = pd.to_datetime(df['datetime'], utc=True)
+        timestamps = (utc.astype('int64') // 10**9).values
+        df['timestamp'] = timestamps.copy()
+        df.to_json(json_path)
     return df
