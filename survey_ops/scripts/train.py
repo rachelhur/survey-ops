@@ -160,6 +160,7 @@ def main():
         cfg['data']['additional_bin_features'] += ['ra', 'dec']
     else:
         cfg['data']['additional_bin_features'] += ['az', 'el']
+    cfg['data']['additional_bin_features'] = list(set(cfg['data']['additional_bin_features']))
     
     # assert errors dne before running rest of code
     if lr_scheduler is not None:
@@ -242,7 +243,6 @@ def main():
     cfg['data']['obs_dim'] = train_dataset.obs_dim
     cfg['data']['num_actions'] = train_dataset.num_actions
     cfg['metadata']['outdir'] = str(PROJECT_ROOT / cfg['metadata']['parent_results_dir'] / cfg['metadata']['exp_name'])
-    print(lr_scheduler_kwargs.items())
     cfg['train']['lr_scheduler_kwargs'] = {key: int(val) for key, val in lr_scheduler_kwargs.items()}
     save_config(config_dict=cfg, outdir=results_outdir)
     logger.info("Starting training...")

@@ -9,13 +9,9 @@ from survey_ops.utils import units
 from survey_ops.utils import ephemerides
 # from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
 from survey_ops.utils.config import Config
-import healpy as hp
 
 import pandas as pd
 import json
-import os
-import time
-import datetime
 from torch.utils.data import random_split, RandomSampler
 
 import astropy
@@ -48,20 +44,17 @@ def expand_feature_names_for_cyclic_norm(feature_names, cyclical_feature_names):
 
 def setup_feature_names(include_default_features, include_bin_features, additional_pointing_features, additional_bin_features,
                         default_pntg_feature_names, default_bin_feature_names, cyclical_feature_names, hpGrid, do_cyclical_norm):
+
     # Any experiment will likely have at least these state features
-    if not include_default_features:
-        required_point_features = []
-        required_bin_features = []
-    else:
-        required_point_features = default_pntg_feature_names \
-                                    if include_default_features else []
-        required_bin_features = default_bin_feature_names \
-                                    if (include_default_features and include_bin_features) else []
+    required_point_features = default_pntg_feature_names \
+                                if include_default_features else []
+    required_bin_features = default_bin_feature_names \
+                                if (include_default_features and include_bin_features) else []
     
     # Include additional features not in default features above
     pointing_feature_names = required_point_features + additional_pointing_features
     if include_bin_features:
-        bin_feature_names = required_bin_features + additional_bin_features
+        bin_feature_names = required_bin_features + list(set(additional_bin_features))
         bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(hpGrid.idx_lookup))])
         bin_feature_names = bin_feature_names.flatten().tolist()
     else:
@@ -78,7 +71,6 @@ def setup_feature_names(include_default_features, include_bin_features, addition
     
     state_feature_names = pointing_feature_names + bin_feature_names
     return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
-
 
 class OfflineDECamDataset(torch.utils.data.Dataset):
     def __init__(self, df=None, cfg: Config = None, glob_cfg=None,

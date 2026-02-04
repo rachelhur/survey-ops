@@ -1,12 +1,12 @@
 {
-    "config": null,
+    "config": "./experiment_results/bc-radec-grid-feats-num_visit_hists/config.json",
     "fits_path": "../data/decam-exposures-20251211.fits",
     "json_path": "../data/decam-exposures-20251211.json",
     "metadata": {
         "parent_results_dir": "experiment_results",
         "exp_name": "bc-radec-grid-feats-num_visit_hists",
         "seed": 10,
-        "outdir": "/home/hurra/Projects/survey-ops/experiment_results/bc-radec-grid-feats-num_visit_hists"
+        "outdir": "/home/rachel/Projects/survey-ops/experiment_results/bc-radec-grid-feats-num_visit_hists"
     },
     "model": {
         "algorithm": "BC",
@@ -26,7 +26,10 @@
         "specific_months": [
             12
         ],
-        "specific_days": null,
+        "specific_days": [
+            1,
+            2
+        ],
         "specific_filters": null,
         "include_bin_features": true,
         "do_cyclical_norm": true,
