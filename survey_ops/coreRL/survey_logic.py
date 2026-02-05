@@ -1,5 +1,5 @@
 import numpy as np
-from survey_ops.utils import ephemerides
+from survey_ops.utils import ephemerides, units
 import logging
 import pandas as pd
 import torch
@@ -21,6 +21,71 @@ def get_fields_in_bin(bin_num, is_azel, timestamp, field2nvisits, field_ids, fie
         sel_valid_fields = np.array([visited.count(fid) < field2nvisits[fid] for fid in fields_in_bin], dtype=bool)
         fields_in_bin = np.array(fields_in_bin)[sel_valid_fields]
     return fields_in_bin
+
+def remove_specific_objects(objects_to_remove, df):
+    nights_with_special_fields = set()
+    for i, spec_obj in enumerate(objects_to_remove):
+        for night, subdf in df.groupby('night'):
+            if any(spec_obj in obj_name for obj_name in subdf['object'].values):
+                nights_with_special_fields.add(night)
+            if subdf['object'] == "":
+                nights_with_special_fields.add(night)
+
+    nights_to_remove_mask = df['night'].isin(nights_with_special_fields)
+    df = df[~nights_to_remove_mask]
+    return df
+
+def relabel_mislabelled_objects(df):
+    """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
+
+    Args
+    ----
+    df (pd.DataFrame): The dataframe with object names and RA/Dec positions.
+
+    Returns
+    -------
+    df_relabelled (pd.DataFrame): The dataframe with relabelled objects.
+    """
+    object_radec_df = df[['object', 'ra', 'dec']]
+    object_radec_groups = object_radec_df.groupby('object')
+    df_relabelled = df.copy(deep=True)
+
+    outlier_indices = []
+    for _, g in object_radec_groups:
+        cutoff_deg = 3
+        median_ra = g.ra.median()
+        delta_ra = g.ra - median_ra
+        delta_ra_shifted = np.remainder(delta_ra + 180, 360) - 180
+        mask_outlier_ra = np.abs(delta_ra_shifted) > cutoff_deg
+
+        median_dec = g.dec.median()
+        delta_dec = g.dec - median_dec
+        delta_dec_shifted = np.remainder(delta_dec + 180, 360) - 180
+        mask_outlier_dec = np.abs(delta_dec_shifted) > cutoff_deg
+
+        mask_outlier = mask_outlier_ra | mask_outlier_dec
+
+        if np.count_nonzero(mask_outlier) > 0:
+            indices = g.index[mask_outlier].values
+            outlier_indices.extend(indices)
+
+    df_relabelled.loc[outlier_indices, 'object'] = [f'{obj_name} (outlier)' for obj_name in df.loc[outlier_indices, 'object'].values]
+    return df_relabelled
+
+def add_per_night_progress_to_dataframe(df):
+    for night, group in df.groupby('night'):
+        bins_visited_tonight = set()
+        visited_running = 0
+        remaining_running = 0
+
+        get_fields_in_bin()
+        
+    # For each bin, add:
+    per_bin_features = [
+        total_visits_to_fields_in_bin / max_possible_visits,
+        num_unvisited_fields_in_bin / num_fields_in_bin,
+        num_incomplete_fields_in_bin / num_fields_in_bin,
+    ]
 
 def add_bin_visits_to_dataframe(df):
     bins_visited = []

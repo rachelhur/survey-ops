@@ -15,7 +15,7 @@ from torch.utils.data import random_split, RandomSampler
 
 import astropy
 import logging
-from survey_ops.coreRL.survey_logic import do_noncyclic_normalizations, add_bin_visits_to_dataframe
+from survey_ops.coreRL.survey_logic import do_noncyclic_normalizations, add_bin_visits_to_dataframe, remove_specific_objects, relabel_mislabelled_objects
 
 
 # Get the logger associated with this module's name (e.g., 'my_module')
@@ -194,65 +194,16 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         )
         return transition
 
-    def _relabel_mislabelled_objects(self, df):
-        """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
-
-        Args
-        ----
-        df (pd.DataFrame): The dataframe with object names and RA/Dec positions.
-
-        Returns
-        -------
-        df_relabelled (pd.DataFrame): The dataframe with relabelled objects.
-        """
-
-        object_radec_df = df[['object', 'ra', 'dec']]
-        object_radec_groups = object_radec_df.groupby('object')
-        df_relabelled = df.copy(deep=True)
-
-        outlier_indices = []
-        for _, g in object_radec_groups:
-            cutoff_deg = 3
-            median_ra = g.ra.median()
-            delta_ra = g.ra - median_ra
-            delta_ra_shifted = np.remainder(delta_ra + 180, 360) - 180
-            mask_outlier_ra = np.abs(delta_ra_shifted) > cutoff_deg
-
-            median_dec = g.dec.median()
-            delta_dec = g.dec - median_dec
-            delta_dec_shifted = np.remainder(delta_dec + 180, 360) - 180
-            mask_outlier_dec = np.abs(delta_dec_shifted) > cutoff_deg
-
-            mask_outlier = mask_outlier_ra | mask_outlier_dec
-
-            if np.count_nonzero(mask_outlier) > 0:
-                indices = g.index[mask_outlier].values
-                outlier_indices.extend(indices)
-
-        df_relabelled.loc[outlier_indices, 'object'] = [f'{obj_name} (outlier)' for obj_name in df.loc[outlier_indices, 'object'].values]
-        return df_relabelled
-
-    def _remove_specific_objects(self, objects_to_remove, df):
-        nights_with_special_fields = set()
-        for i, spec_obj in enumerate(objects_to_remove):
-            for night, subdf in df.groupby('night'):
-                if any(spec_obj in obj_name for obj_name in subdf['object'].values):
-                    nights_with_special_fields.add(night)
-        
-        nights_to_remove_mask = df['night'].isin(nights_with_special_fields)
-        df = df[~nights_to_remove_mask]
-        return df
-
     def _drop_rows(self, df):
         # Remove observations in 1970 - what are these?
         df = df[df['datetime'].dt.year != 1970]
         assert len(df) > 0, "No observations found for the specified year/month/day/filter selections."
 
         # Remove specific nights according to object name
-        df = self._remove_specific_objects(objects_to_remove=self.objects_to_remove, df=df)
+        df = remove_specific_objects(objects_to_remove=self.objects_to_remove, df=df)
         
         # Some fields are mis-labelled - add '(outlier)' to these object names so that they are treated as separate fields
-        df = self._relabel_mislabelled_objects(df)
+        df = relabel_mislabelled_objects(df)
         return df
 
     def _process_dataframe(self, df, specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
@@ -410,11 +361,9 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         bin_df = pd.concat([bin_df, new_cols_df], axis=1)
 
         bin_df = bin_df.reset_index(drop=True, inplace=False)
-        # zenith_df = self._get_zenith_states(original_df=bin_df, is_pointing=False)
-        # bin_df = pd.concat([bin_df, zenith_df], ignore_index=True)
         bin_df = bin_df.sort_values(by='timestamp')
         
-        # Pointing features already in DECam data
+        # Make sure there are no missing columns
         missing_cols = set(self.bin_feature_names) - set(bin_df.columns) == 0
         assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. These are not yet implemented in method self._get_bin_features()'
 
