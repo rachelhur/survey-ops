@@ -20,7 +20,7 @@ from survey_ops.utils.sys_utils import setup_logger, get_device
 from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe
 from survey_ops.coreRL.environments import OfflineEnv
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
-from survey_ops.utils.config import Config, save_config, load_global_config, dict_to_nested
+from survey_ops.utils.config import save_config, load_global_config, dict_to_nested
 import logging
 logger = logging.getLogger(__name__)
 
@@ -363,8 +363,6 @@ def main():
         fig_b.savefig(subdir_path + f'bin_vs_step.png')
         plt.close()
         
-        plt.close()
-
         # Plot state features vs timestamp for first episode
         fig, axs = plt.subplots(len(test_dataset.pointing_feature_names), figsize=(10, len(test_dataset.pointing_feature_names)*5))
         for i, feature_row in enumerate(eval_metrics['ep-0']['observations'][f'night-{night_idx}'].T[:len(test_dataset.pointing_feature_names)]):

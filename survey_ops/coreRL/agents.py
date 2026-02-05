@@ -12,7 +12,7 @@ import random
 
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
+from survey_ops.coreRL.survey_logic import get_fields_in_bin
 from survey_ops.utils import ephemerides
 import logging
 
@@ -75,7 +75,7 @@ class Agent:
         raise NotImplementedError
 
         
-    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, patience=10, train_log_freq=10):
+    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, patience=10, train_log_freq=10, hpGrid=None):
         """Trains the agent on a transition dataset.
 
         Uses repeated sampling from a dataset that implements `sample(batch_size)`
@@ -182,8 +182,8 @@ class Agent:
                             # --- old method fallback ---
                             eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
-                        val_metric_vals = self.algorithm.test_step(eval_batch)
-                        val_train_metric_vals = self.algorithm.test_step(batch)
+                        val_metric_vals = self.algorithm.test_step(eval_batch, hpGrid)
+                        val_train_metric_vals = self.algorithm.test_step(batch, hpGrid)
 
                         for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
                             val_metrics[metric_name].append(metric_val)
@@ -233,27 +233,6 @@ class Agent:
     
     def evaluate(self, env, cfg, num_episodes, field_choice_method='interp', eval_outdir=None):
         """Evaluates the agent in an environment for multiple episodes.
-
-        Runs greedy (epsilon-free) policy evaluation using the current
-        Q-network. Tracks rewards and observations per episode, as well as
-        summary statistics.
-
-        Args:
-            env (gym.Env):
-                Gymnasium environment with `.reset()` and `.step()` APIs.
-                Must supply `info['action_mask']` if action masking is required.
-            num_episodes (int):
-                Number of rollout episodes to evaluate.
-
-        Saves:
-            `<outdir>/eval_metrics.pkl` containing:
-                - `mean_reward`
-                - `std_reward`
-                - `min_reward`
-                - `max_reward`
-                - `episode_rewards` (list)
-                - `observations` (dict of arrays per episode)
-                - `rewards` (dict of reward arrays per episode)
         """
         eval_outdir = eval_outdir if eval_outdir is not None else self.train_outdir + 'evaluation/'
         if not os.path.exists(eval_outdir):
@@ -264,10 +243,6 @@ class Agent:
         episode_rewards = []
         eval_metrics = {}
 
-        if cfg['data']['bin_space'] == 'radec':
-            get_fields_in_bin = get_fields_in_radec_bin
-        else:
-            get_fields_in_bin = get_fields_in_azel_bin
         field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
         bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
         hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=cfg['data']['nside'], is_azel=(cfg['data']['bin_space'] == 'azel'))
@@ -301,7 +276,7 @@ class Agent:
 
                         action_mask = info.get('action_mask', None)
                         action = self.act(obs, action_mask, epsilon=None)
-                        fields_in_bin = get_fields_in_bin(bin_num=action, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'), bin2fields_in_bin=bin2fields_in_bin)
+                        fields_in_bin = get_fields_in_bin(bin_num=action, is_azel=hpGrid.is_azel, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'), bin2fields_in_bin=bin2fields_in_bin)
                         field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
 
                         actions = np.array([action, field_id], dtype=np.int32)

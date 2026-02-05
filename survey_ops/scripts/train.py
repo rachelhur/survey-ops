@@ -13,7 +13,7 @@ from survey_ops.algorithms.factory import setup_algorithm
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
 from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe 
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
-from survey_ops.utils.config import Config, save_config, load_global_config, dict_to_nested
+from survey_ops.utils.config import save_config, load_global_config, dict_to_nested
 
 import argparse
 import logging
@@ -49,7 +49,6 @@ def plot_metrics(results_outdir):
 
     axs[2].scatter(train_metrics['epoch'], train_metrics['lr'], marker='o', s=10)
     axs[2].set_ylabel('LR', fontsize=14)
-    axs[2].set_xlabel('Epoch', fontsize=14)
 
     i = 0
     for key in val_metrics.keys():
@@ -59,9 +58,19 @@ def plot_metrics(results_outdir):
             i += 1
     axs[3].hlines(0, xmin=0, xmax=np.max(val_metrics['epoch']), linestyle='--', color='red')
     axs[3].legend()
+    axs[3].set_xlabel('Epoch', fontsize=14)
 
     fig.tight_layout()
     fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')
+
+    if 'ang_sep' in val_metrics:
+        fig, ax = plt.subplots()
+        ax.plot(val_train_metrics['epoch'], val_train_metrics['ang_sep'], label='train', color='grey', alpha=.5, linestyle='dotted')
+        ax.plot(val_metrics['epoch'], val_metrics['ang_sep'], label='val')
+        ax.set_ylabel('Angular separation (rad)', fontsize=14)
+        ax.set_xlabel('Epoch')
+        ax.legend(fontsize=12)
+        fig.savefig(results_outdir / 'figures' / 'angular_separation_history.png')
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -95,7 +104,7 @@ def get_args():
     parser.add_argument('--data.include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
     parser.add_argument('--data.do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
     parser.add_argument('--data.do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
-    parser.add_argument('--data.do_inverse_airmass', action='store_true', help='Whether to include inverse airmass as a feature')
+    parser.add_argument('--data.do_inverse_norm', action='store_true', help='Whether to include inverse normalizations to features')
     parser.add_argument('--data.remove_large_time_diffs', action='store_true', help='New method of calculating transitions which removes any transitions with time difference greater than 10 min')
     parser.add_argument('--data.additional_bin_features', type=str, nargs='*', default=[], help='Other bin feautures to include')
     parser.add_argument('--data.additional_pointing_features', type=str, nargs='*', default=[], help='Other pointing feautures to include')
@@ -255,6 +264,7 @@ def main():
         valloader=valloader,
         batch_size=batch_size,
         patience=cfg['train']['patience'],
+        hpGrid=train_dataset.hpGrid
     )
     end_time = time.time()
     logger.info(f'Total train time = {end_time - start_time}s on {device}')

@@ -6,9 +6,15 @@ import torch.nn.functional as F
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
 from survey_ops.coreRL.neural_nets import DQN
-import logging
+from survey_ops.utils import geometry
 
+import logging
 logger = logging.getLogger(__name__)
+
+from pathlib import Path
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parents[1] 
+
 
 class AlgorithmBase:
     def __init__(self):
@@ -242,7 +248,7 @@ class BehaviorCloning(AlgorithmBase):
             self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
             self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
 
-        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy','accuracy']
+        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'accuracy']
         
     def train_step(self, batch, epoch_num, step_num=None):
         """
@@ -278,7 +284,7 @@ class BehaviorCloning(AlgorithmBase):
 
         return loss.item(), None
     
-    def test_step(self, batch):
+    def test_step(self, batch, hpGrid=None):
         eval_obs, expert_actions, rewards, next_obs, dones, action_masks = batch
 
         with torch.no_grad():      
@@ -291,7 +297,7 @@ class BehaviorCloning(AlgorithmBase):
             loss = self.loss_fxn(action_logits, expert_actions)
 
             accuracy = (predicted_actions == expert_actions).float().mean()
-            
+
             # Get logp(a_expert|state)
             logp = F.log_softmax(action_logits, dim=-1)
             logp_expert_actions = logp.gather(1, expert_actions.unsqueeze(1)).squeeze(1)
@@ -309,7 +315,18 @@ class BehaviorCloning(AlgorithmBase):
             p = F.softmax(action_logits, dim=-1)
             entropy = -(p * logp).sum(dim=-1)
 
-        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), accuracy.item()
+            # Get angular separation
+            if hpGrid is not None:
+                predicted_actions = predicted_actions.cpu()
+                expert_actions = expert_actions.cpu()
+                predicted_coords = np.array((hpGrid.lon[predicted_actions], hpGrid.lat[predicted_actions]))
+                expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[predicted_actions]))
+                ang_seps = geometry.angular_separation(predicted_coords, expert_actions_coords)
+                ang_sep = ang_seps.mean()
+            else:
+                ang_sep = 0
+
+        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, accuracy.item()
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():

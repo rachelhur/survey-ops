@@ -1,0 +1,49 @@
+{
+    "config": null,
+    "fits_path": "../data/decam-exposures-20251211.fits",
+    "json_path": "../data/decam-exposures-20251211.json",
+    "metadata": {
+        "parent_results_dir": "experiment_results",
+        "exp_name": "bc-azel-w-hist-best",
+        "seed": 10
+    },
+    "model": {
+        "algorithm": "BC",
+        "loss_function": "cross_entropy",
+        "tau": 0.005,
+        "gamma": 0.99,
+        "activation": "relu"
+    },
+    "data": {
+        "bin_method": "healpix",
+        "nside": 16,
+        "num_bins_1d": 16,
+        "bin_space": "azel",
+        "specific_years": [
+            2018
+        ],
+        "specific_months": null,
+        "specific_days": null,
+        "specific_filters": null,
+        "include_bin_features": false,
+        "do_cyclical_norm": true,
+        "do_max_norm": true,
+        "do_inverse_norm": true,
+        "remove_large_time_diffs": true,
+        "additional_bin_features": [],
+        "additional_pointing_features": ["bins_visited_in_night"]
+    },
+    "train": {
+        "max_epochs": 800.0,
+        "batch_size": 1024,
+        "num_workers": 8,
+        "use_train_as_val": false,
+        "lr": 0.001,
+        "lr_scheduler": "cosine_annealing",
+        "lr_scheduler_num_epochs": 100,
+        "lr_scheduler_epoch_start": 5,
+        "eta_min": 0.00001,
+        "hidden_dim": 1024,
+        "patience": 100
+    }
+}

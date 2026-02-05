@@ -8,7 +8,6 @@ from tqdm import tqdm
 from survey_ops.utils import units
 from survey_ops.utils import ephemerides
 # from survey_ops.coreRL.survey_logic import get_fields_in_azel_bin, get_fields_in_radec_bin
-from survey_ops.utils.config import Config
 
 import pandas as pd
 import json
@@ -16,6 +15,7 @@ from torch.utils.data import random_split, RandomSampler
 
 import astropy
 import logging
+from survey_ops.coreRL.survey_logic import do_noncyclic_normalizations, add_bin_visits_to_dataframe
 
 
 # Get the logger associated with this module's name (e.g., 'my_module')
@@ -73,14 +73,14 @@ def setup_feature_names(include_default_features, include_bin_features, addition
     return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
 
 class OfflineDECamDataset(torch.utils.data.Dataset):
-    def __init__(self, df=None, cfg: Config = None, glob_cfg=None,
+    def __init__(self, df=None, cfg = None, glob_cfg=None,
                  specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
         assert cfg is not None, "Must pass Config object"
 
         # Assign static attributes
         self.do_cyclical_norm = cfg['data']['do_cyclical_norm']
         self.do_max_norm = cfg['data']['do_max_norm']
-        self.do_inverse_airmass = cfg['data']['do_inverse_airmass']
+        self.do_inverse_norm = cfg['data']['do_inverse_norm']
         self.objects_to_remove = ["guide", "DES vvds","J0'","gwh","DESGW","Alhambra-8","cosmos","COSMOS hex","TMO","LDS","WD0","DES supernova hex","NGC","ec"]
 
         self._calculate_action_mask = cfg['model']['algorithm'] != 'BC' # should be False if using bc (to minimize data processing time), otherwise True
@@ -160,8 +160,24 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # Set dimension of observation
         self.obs_dim = self.states.shape[-1]
 
-        # Normalize states and next_states in place
-        self._do_noncyclic_normalizations()
+        # Normalize states and next_states
+        self.states = do_noncyclic_normalizations(
+            self.states,
+            self.state_feature_names,
+            self.max_norm_feature_names,
+            self.do_inverse_norm,
+            self.do_max_norm,
+            fix_nans=True
+        )
+        self.next_states = do_noncyclic_normalizations(
+            self.next_states,
+            self.state_feature_names,
+            self.max_norm_feature_names,
+            self.do_inverse_norm,
+            self.do_max_norm,
+            fix_nans=True
+        )      
+        # self._do_noncyclic_normalizations()
 
         
     def __len__(self):
@@ -177,25 +193,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.action_masks[idx]
         )
         return transition
-
-    def _do_noncyclic_normalizations(self):
-        """Performs z-score normalization on any non-periodic features for all features, including bin-specific features"""
-        if self.do_inverse_airmass:
-            logger.info('Performing inverse airmass normalization')
-            airmass_mask = torch.tensor(np.array(['airmass' in feat_name for feat_name in self.state_feature_names]), dtype=torch.bool)
-            self.states[:, airmass_mask] = 1.0 / self.states[:, airmass_mask]
-            self.next_states[:, airmass_mask] = 1.0 / self.next_states[:, airmass_mask]
-        
-        if self.do_max_norm:
-            logger.info('Performing max normalziation')
-            logger.debug('(First need to get mask to mask out all state features which do not use this normalization)')
-            max_norm_mask = torch.tensor(np.array([
-                any(max_feat in feat_name for max_feat in self.max_norm_feature_names)
-                for feat_name in self.state_feature_names
-                ], dtype=bool), dtype=torch.bool)
-            logger.debug('(Then divide by max val for each feature)')
-            self.states[:, max_norm_mask] = self.states[:, max_norm_mask] / (np.pi/2)
-            self.next_states[:, max_norm_mask] = self.next_states[:, max_norm_mask] / (np.pi/2)
 
     def _relabel_mislabelled_objects(self, df):
         """Renames object columns with 'object_name (outlier)' if they are outside of a certain cutoff from the median RA/Dec.
@@ -262,15 +259,19 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         """Processes and filters the dataframe to return a new dataframe with added columns for current pointing state features"""
         # Add column which indicates observing night (noon to noon)
         # Get observations for specific years, days, filters, etc.
-        if specific_years is not None:
+        if specific_years is not None and specific_years is not []:
             df = df[df['night'].dt.year.isin(specific_years)]
-        if specific_months is not None:
+            assert not df.empty, f"Years {specific_years} do not exist in dataset"
+        if specific_months is not None and specific_months is not []:
             df = df[df['night'].dt.month.isin(specific_months)]
-        if specific_days is not None:
+            assert not df.empty, f"Months {specific_months} do not exist in years {specific_years}"
+        if specific_days is not None and specific_days is not []:
             df = df[df['night'].dt.day.isin(specific_days)]
-        if specific_filters is not None:
+            assert not df.empty, f"Days {specific_days} do not exist in months {specific_months}, and years {specific_years}"
+        if specific_filters is not None and specific_filters is not []:
             df = df[df['filter'].isin(specific_filters)]
-        
+            assert not df.empty, f"Filters {specific_filters} do not exist in days {specific_days}, months {specific_months}, and years {specific_years}"
+
         # Sort df by timestamp
         df = df.sort_values(by='timestamp')
 
@@ -286,25 +287,10 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
 
         df['time_fraction_since_start'] = df.groupby('night')['timestamp'].transform(lambda x: (x - x.values[0]) / (x.values[-1] - x.values[0]) if len(x) > 1 else 0)
         df.loc[:, ['ra', 'dec', 'az', 'zd', 'ha']] *= units.deg
+        df['el'] = np.pi/2 - df['zd'].values
 
-        # Normalize periodic features here and add as df cols
-        if self.do_cyclical_norm:
-            for feat_name in self.base_pointing_feature_names:
-                if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
-                    df[f'{feat_name}_cos'] = np.cos(df[feat_name].values)
-                    df[f'{feat_name}_sin'] = np.sin(df[feat_name].values)
-
-        # Add other feature columns for those not present in dataframe
-        for feat_name in self.base_pointing_feature_names:
-            if feat_name in df.columns:
-                continue
-            else:
-                if feat_name == 'el':
-                    df['el'] = np.pi/2 - df['zd'].values
-                else:
-                    raise NotImplementedError(f'{feat_name} not yet implemented')
-
-        # Add bin column to dataframe
+        # Add bin and field id columns to dataframe
+        df['field_id'] = df['object'].map({v: k for k, v in self.field2name.items()})
         if self.hpGrid is not None:
             if self.hpGrid.is_azel:
                 lon = df['az']
@@ -314,7 +300,19 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 lat = df['dec']
             df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
 
-        df['field_id'] = df['object'].map({v: k for k, v in self.field2name.items()})
+        # Add other feature columns for those not present in dataframe
+        for feat_name in self.base_pointing_feature_names:
+            if feat_name in df.columns:
+                continue
+            else:
+                if 'bins_visited_in_night' in self.pointing_feature_names:
+                    df = add_bin_visits_to_dataframe(df)
+        # Normalize periodic features here and add as df cols
+        if self.do_cyclical_norm:
+            for feat_name in self.base_pointing_feature_names:
+                if any(string in feat_name and 'frac' not in feat_name and 'bin' not in feat_name for string in self.cyclical_feature_names):
+                    df[f'{feat_name}_cos'] = np.cos(df[feat_name].values)
+                    df[f'{feat_name}_sin'] = np.sin(df[feat_name].values)
 
         # Insert zenith states in dataframe (needed for gym.environment to use zenith state as first state)
 
