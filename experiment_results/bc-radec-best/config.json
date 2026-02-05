@@ -1,5 +1,5 @@
 {
-    "config": "config.json",
+    "config": "./bc-radec-best/config.json",
     "fits_path": "../data/decam-exposures-20251211.fits",
     "json_path": "../data/decam-exposures-20251211.json",
     "metadata": {

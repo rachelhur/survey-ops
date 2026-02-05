@@ -1,5 +1,5 @@
 {
-    "config": "config.json",
+    "config": "bc-azel-best/config.json",
     "fits_path": "../data/decam-exposures-20251211.fits",
     "json_path": "../data/decam-exposures-20251211.json",
     "metadata": {
@@ -32,8 +32,8 @@
         "do_inverse_norm": true,
         "remove_large_time_diffs": true,
         "additional_bin_features": [
-            "dec",
-            "ra"
+            "ra",
+            "dec"
         ],
         "additional_pointing_features": [],
         "obs_dim": 22,

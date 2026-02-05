@@ -248,7 +248,7 @@ class BehaviorCloning(AlgorithmBase):
             self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
             self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
 
-        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'accuracy']
+        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'unique_bins', 'accuracy']
         
     def train_step(self, batch, epoch_num, step_num=None):
         """
@@ -279,7 +279,7 @@ class BehaviorCloning(AlgorithmBase):
                                 and epoch_num <= self.lr_scheduler_num_epochs + self.lr_scheduler_epoch_start
         )
         if do_lr_scheduler_step:
-            logger.debug(f'---------------- Doing lr scheduler step at epoch {epoch_num} ----------------')
+            # logger.debug(f'---------------- Doing lr scheduler step at epoch {epoch_num} ----------------')
             self.lr_scheduler.step()
 
         return loss.item(), None
@@ -315,18 +315,23 @@ class BehaviorCloning(AlgorithmBase):
             p = F.softmax(action_logits, dim=-1)
             entropy = -(p * logp).sum(dim=-1)
 
-            # Get angular separation
             if hpGrid is not None:
+                # Get angular separation
                 predicted_actions = predicted_actions.cpu()
                 expert_actions = expert_actions.cpu()
                 predicted_coords = np.array((hpGrid.lon[predicted_actions], hpGrid.lat[predicted_actions]))
                 expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[predicted_actions]))
                 ang_seps = geometry.angular_separation(predicted_coords, expert_actions_coords)
                 ang_sep = ang_seps.mean()
+                # Prediction diversity
+                num_actions = len(hpGrid.lon)
+                unique_preds = len(torch.unique(predicted_actions))
+                unique_bins = unique_preds / num_actions
             else:
                 ang_sep = 0
 
-        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, accuracy.item()
+
+        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, unique_bins, accuracy.item()
     
     def select_action(self, obs, action_mask, epsilon=None):
         with torch.no_grad():
