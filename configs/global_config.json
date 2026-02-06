@@ -19,10 +19,6 @@
 	  "airmass"
 	],
     "DEFAULT_BIN_FEATURE_NAMES": [
-      "ha",
-      "airmass",
-      "ang_dist_to_moon",
-      "num_visits_hist"
     ],
     "DEFAULT_PNTG_FEATURE_NAMES": [
       "ra",
@@ -50,8 +46,8 @@
     "FIELD2NVISITS": "field2nvisits.json"
   },
   "paths": {
-    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups",
-    "DATA_DIR": "/home/hurra/Projects/survey-ops/data/",
+    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
+    "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
     "SURVEY_OPS": "/home/hurra/Projects/survey-ops/"
     }
 }
