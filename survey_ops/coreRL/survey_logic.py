@@ -26,9 +26,7 @@ def remove_specific_objects(objects_to_remove, df):
     nights_with_special_fields = set()
     for i, spec_obj in enumerate(objects_to_remove):
         for night, subdf in df.groupby('night'):
-            if any(spec_obj in obj_name for obj_name in subdf['object'].values):
-                nights_with_special_fields.add(night)
-            if subdf['object'] == "":
+            if any(spec_obj in obj_name for obj_name in subdf['object'].values) or any(subdf['object'] == ""):
                 nights_with_special_fields.add(night)
 
     nights_to_remove_mask = df['night'].isin(nights_with_special_fields)
@@ -78,15 +76,7 @@ def add_per_night_progress_to_dataframe(df):
         visited_running = 0
         remaining_running = 0
 
-        get_fields_in_bin()
         
-    # For each bin, add:
-    per_bin_features = [
-        total_visits_to_fields_in_bin / max_possible_visits,
-        num_unvisited_fields_in_bin / num_fields_in_bin,
-        num_incomplete_fields_in_bin / num_fields_in_bin,
-    ]
-
 def add_bin_visits_to_dataframe(df):
     bins_visited = []
     

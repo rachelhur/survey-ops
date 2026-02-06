@@ -10,6 +10,8 @@ import pickle
 
 from survey_ops.coreRL.agents import Agent
 from survey_ops.algorithms.factory import setup_algorithm
+from survey_ops.utils import geometry
+from survey_ops.utils import units
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
 from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe 
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
@@ -23,7 +25,38 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1] 
 
-def plot_metrics(results_outdir):
+"""
+Features implemented so far:
+POINTING FEATURES:
+    "ra",
+    "dec",
+    "az",
+    "el",
+    "airmass",
+    "ha",
+    "sun_ra",
+    "sun_dec",
+    "sun_az",
+    "sun_el",
+    "moon_ra",
+    "moon_dec",
+    "moon_az",
+    "moon_el",
+    "time_fraction_since_start"
+    "bins_visited_in_night": Number of unique bins visited so far in the night
+
+
+BIN FEATURES:
+    "ha",
+    "airmass",
+    "ang_dist_to_moon",
+    "night_num_visits",
+    "night_num_unvisited_fields",
+    "night_num_incomplete_fields"
+
+"""
+
+def plot_metrics(results_outdir, dataset):
     with open(results_outdir / 'train_metrics.pkl', 'rb') as f:
         train_metrics = pickle.load(f)
     with open(results_outdir / 'val_metrics.pkl', 'rb') as f:
@@ -64,13 +97,34 @@ def plot_metrics(results_outdir):
     fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')
 
     if 'ang_sep' in val_metrics:
+        lonlat = np.array((dataset.hpGrid.lon, dataset.hpGrid.lat))
+        pos1 = lonlat[:, :-1]
+        pos2 = lonlat[:, 1:]
+        ang_seps = geometry.angular_separation(pos1=pos1, pos2=pos2)
+        average_bin_sep = np.mean(ang_seps)
         fig, ax = plt.subplots()
         ax.plot(val_train_metrics['epoch'], val_train_metrics['ang_sep'], label='train', color='grey', alpha=.5, linestyle='dotted')
         ax.plot(val_metrics['epoch'], val_metrics['ang_sep'], label='val')
         ax.set_ylabel('Angular separation (rad)', fontsize=14)
         ax.set_xlabel('Epoch')
+        ax.hlines(y=average_bin_sep, xmin=0, xmax=np.max(val_train_metrics['epoch']), label='average bin center separation', color='black', linestyle='dotted')
         ax.legend(fontsize=12)
+        fig.tight_layout()
         fig.savefig(results_outdir / 'figures' / 'angular_separation_history.png')
+
+    if 'unique_bins' in val_metrics:
+        # Count bins with < 10 examples
+        bin_ids, _ = np.unique(dataset.actions.detach().numpy(), return_counts=True)
+        total_bin_diversity = len(bin_ids)/dataset.num_actions
+        fig, ax = plt.subplots()
+        ax.plot(val_train_metrics['epoch'], val_train_metrics['unique_bins'], label='train', color='grey', alpha=.5, linestyle='dotted')
+        ax.plot(val_metrics['epoch'], val_metrics['unique_bins'], label='val')
+        ax.set_ylabel('Unique bins \n (normalized by total number of bins)', fontsize=14)
+        ax.set_xlabel('Epoch')
+        ax.hlines(y=total_bin_diversity, xmin=0, xmax=np.max(val_train_metrics['epoch']), label='dataset-wide unique bin visit', color='black', linestyle='dotted')
+        ax.legend(fontsize=12)
+        fig.tight_layout()
+        fig.savefig(results_outdir / 'figures' / 'unique_bins_history.png')
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -129,6 +183,7 @@ def get_args():
         assert Path(args.config).exists(), f"Config file at {args.config} does not exist."
             
         with open(args.config, 'r') as f:
+            print(args.config)
             file_conf = json.load(f)
             for section, values in file_conf.items():
                 if isinstance(values, dict):
@@ -184,8 +239,8 @@ def main():
 
     logger.info("Loading raw data...")
 
-    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECFITS']), 
-                                    Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECJSON']))
+    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECFITS']), 
+                                    Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECJSON']))
 
     logger.info("Processing raw data into OfflineDataset()...")
     # Need to include paths.lookup_dir in cfg before sending to offline dataset -- brittle
@@ -270,7 +325,7 @@ def main():
     logger.info(f'Total train time = {end_time - start_time}s on {device}')
     logger.info("Training complete.")
     logger.info("Plotting training loss curve...")
-    plot_metrics(results_outdir)
+    plot_metrics(results_outdir, dataset=train_dataset)
 
     # Plot predicted action for each state in train dataset
     dataset = trainloader.dataset.dataset

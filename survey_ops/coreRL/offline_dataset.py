@@ -329,6 +329,12 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         num_visits_hist = np.zeros_like(hour_angles, dtype=np.int32)
         num_visits_tracking = np.zeros_like(hour_angles[0])
 
+
+        do_night_num_visits = "night_num_visits" in self.base_bin_feature_names            
+        do_night_num_unvisited_fields = "night_num_unvisited_fields" in self.base_bin_feature_names            
+        do_night_num_incomplete_fields = "night_num_incomplete_fields" in self.base_bin_feature_names            
+        do_survey_num_visits = "num_visits_hist" in self.base_bin_feature_names
+
         lon, lat = self.hpGrid.lon, self.hpGrid.lat
         for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating bin features for all healpix bins and timestamps'):
             hour_angles[i] = self.hpGrid.get_hour_angle(time=time)
@@ -338,10 +344,70 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                 xs[i], ys[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
             else:
                 xs[i], ys[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
-            if df.iloc[i]['object'] != 'zenith':
-                bin_num = df.iloc[i]['bin']
-                num_visits_tracking[bin_num] += 1
-            num_visits_hist[i] = num_visits_tracking.copy()
+            # Tracks number of bins since start of *survey*
+            if do_survey_num_visits:
+                if df.iloc[i]['object'] != 'zenith':
+                    bin_num = df.iloc[i]['bin']
+                    num_visits_tracking[bin_num] += 1
+                num_visits_hist[i] = num_visits_tracking.copy()
+
+        if any(do_night_num_visits, do_night_num_unvisited_fields, do_night_num_incomplete_fields):
+            night_num_visits = np.zeros(shape=(len(df), len(self.hpGrid.idx_lookup)))
+            night_num_unvisited_fields = np.zeros_like(night_num_visits)
+            night_num_incomplete_fields = np.zeros_like(night_num_visits)
+            index = -1
+            for night, group in tqdm(df.groupby('night'), total=df.groupby('night').ngroups, desc='Calculating night history bin features'):
+                if not self.hpGrid.is_azel:
+                    unique_field_ids, unique_field_counts = np.unique(group['field_id'][group['object'] != 'zenith'].to_numpy().astype(np.int32), return_counts=True)
+                    unique_bin_ids, unique_bin_counts = np.unique(group['bin'][group['object'] != 'zenith'], return_counts=True)
+                    field2nvisits = {int(fid): int(c) for fid, c in zip(unique_field_ids, unique_field_counts)}
+                    # bin2nvisits = {int(bid): int(c) for bid, c in zip(unique_bin_ids, unique_bin_counts)}
+                    total_num_observations = len(group)
+
+                    # Build bin2fields map
+                    bins_arr = group['bin'].to_numpy(dtype=np.int32)
+                    fields_arr = group['field_id'].to_numpy(dtype=np.int32)
+                    bin2fields_in_bin = {}
+                    for b, f in zip(bins_arr, fields_arr):
+                        if f != -1:
+                            bin2fields_in_bin.setdefault(int(b), set()).add(int(f))
+                    
+                    field_visit_counter = defaultdict(int)
+                    num_visits_tracking = np.zeros_like(night_num_visits[0])
+                    num_unvisited_fields_tracking = np.zeros_like(night_num_visits[0])
+                    num_incomplete_fields_tracking = np.zeros_like(night_num_visits[0])
+
+                    for i_row in range(len(group)):
+                        index += 1
+                        field_id = int(fields_arr[i_row])
+                        bin_num = int(bins_arr[i_row])
+                        if field_id == -1:
+                            # initialize once per night
+                            for bid, flist in bin2fields_in_bin.items():
+                                num_unvisited_fields_tracking[bid] = len(flist)
+                                num_incomplete_fields_tracking[bid] = len(flist)
+                        else:
+                            field_visit_counter[field_id] += 1
+                            
+                            # Add one visit to bin
+                            num_visits_tracking[bin_num] += 1
+                
+                            # If this is the first time this field is being visited, subtract one field from tracker
+                            if field_visit_counter[field_id] == 1:
+                                num_unvisited_fields_tracking[bin_num] -= 1
+                
+                            # If field has been fully visited, subtract one field from tracker
+                            if field_visit_counter[field_id] == field2nvisits[field_id]:
+                                num_incomplete_fields_tracking[bin_num] -= 1
+                        night_num_visits[index] = num_visits_tracking / total_num_observations
+                        night_num_unvisited_fields[index] = num_unvisited_fields_tracking / total_num_observations
+                        night_num_incomplete_fields[index] = num_incomplete_fields_tracking / total_num_observations
+                    
+                    #TODO: some field dithers are in different bins - need to account for this when calculating unvisited and incomplete fields, currently undercounting (very rarely occurs)
+                    # sanity check (checks above)
+                    # if not np.all(num_incomplete_fields_tracking[unique_bin_ids] == 0):
+                    #     print("Night", night, "incomplete:", 
+                    #         num_incomplete_fields_tracking[unique_bin_ids])
 
         stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys, num_visits_hist], axis=2) # Order must be exactly same as base_bin_feature_names
         bin_states = stacked.reshape(len(hour_angles), -1)

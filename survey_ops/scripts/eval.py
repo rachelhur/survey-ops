@@ -244,8 +244,8 @@ def main():
 
     device = get_device()
     logger.info("Loading raw data...")
-    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECFITS']), 
-                                    Path(global_cfg['paths']['DATA_DIR']) / Path(global_cfg['files']['DECJSON']))
+    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECFITS']), 
+                                    Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECJSON']))
     
     nside = cfg['data']['nside']
 
@@ -331,8 +331,8 @@ def main():
 
     logger.info("Generating evaluation plots...")
 
-    bin2pos_filepath = global_cfg['paths']['LOOKUP_DIR'] + '/' + f"nside{nside}_bin2{cfg['data']['bin_space']}.json"
-    field2radec_filepath = global_cfg['paths']['LOOKUP_DIR'] + '/' + global_cfg['files']['FIELD2RADEC']
+    bin2pos_filepath = global_cfg['paths']['LOOKUP_DIR'] + f"nside{nside}_bin2{cfg['data']['bin_space']}.json"
+    field2radec_filepath = global_cfg['paths']['LOOKUP_DIR'] + global_cfg['files']['FIELD2RADEC']
     with open(field2radec_filepath, 'r') as f:
         FIELD2RADEC = json.load(f)
 
