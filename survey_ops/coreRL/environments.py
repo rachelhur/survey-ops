@@ -1,3 +1,4 @@
+from collections import defaultdict
 from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
@@ -286,9 +287,11 @@ class OfflineEnv(BaseTelescope):
             field2radec = json.load(f)
         with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2NVISITS'], 'r') as f:
             field2nvisits = json.load(f)
+
         self.field2radec = {int(k): v for k, v in field2radec.items()}
         self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
         self.field_radecs = np.array(list(self.field2radec.values()))
+        self.total_num_obs = sum(field2nvisits.values())
 
 
         # Bin-space dependent function to get fields in bin
@@ -449,6 +452,17 @@ class OfflineEnv(BaseTelescope):
         self._timestamp = first_row_in_night_pointing['timestamp']
         self._visited.append(self._field_id)
         self._bins_visited.append(self._bin_num)
+
+        # self._field_visit_counter = defaultdict(int)
+        # self._num_visits_tracking = np.zeros_like(self.hpGrid.idx_lookup)
+        # self._num_unvisited_fields_tracking = np.zeros_like(self.hpGrid.idx_lookup)
+        # self._num_incomplete_fields_tracking = np.zeros_like(self.hpGrid.idx_lookup)
+        
+        # unique_field_ids, unique_field_counts = np.unique(group['field_id'][group['object'] != 'zenith'].to_numpy().astype(np.int32), return_counts=True)
+        # unique_bin_ids, unique_bin_counts = np.unique(group['bin'][group['object'] != 'zenith'], return_counts=True)
+        # field2nvisits = {int(fid): int(c) for fid, c in zip(unique_field_ids, unique_field_counts)}
+        # bin2nvisits = {int(bid): int(c) for bid, c in zip(unique_bin_ids, unique_bin_counts)}
+        # total_num_observations = len(group)
 
         self._pointing_state_features = [first_row_in_night_pointing[feat_name] for feat_name in self.pointing_feature_names]
         if self.include_bin_features:

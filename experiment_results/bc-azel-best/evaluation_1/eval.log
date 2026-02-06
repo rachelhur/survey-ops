@@ -1,32 +1,44 @@
-2026-02-04 17:49:22 - INFO - Saving results in /home/hurra/Projects/survey-ops/experiment_results/bc-azel-best/evaluation_1/
-2026-02-04 17:49:22 - WARNING - Experiment parameters:
-2026-02-04 17:49:22 - INFO - seed: 10
-2026-02-04 17:49:22 - INFO - make_gifs: False
-2026-02-04 17:49:22 - INFO - trained_model_dir: ./bc-azel-best/
-2026-02-04 17:49:22 - INFO - evaluation_name: evaluation_1
-2026-02-04 17:49:22 - INFO - specific_years: [2017]
-2026-02-04 17:49:22 - INFO - specific_months: [1]
-2026-02-04 17:49:22 - INFO - specific_days: [20, 27]
-2026-02-04 17:49:22 - INFO - specific_filters: None
-2026-02-04 17:49:22 - INFO - logging_level: info
-2026-02-04 17:49:22 - INFO - fits_path: ../data/decam-exposures-20251211.fits
-2026-02-04 17:49:22 - INFO - json_path: ../data/decam-exposures-20251211.json
-2026-02-04 17:49:22 - INFO - num_episodes: 1
-2026-02-04 17:49:22 - INFO - Loading raw data...
-2026-02-04 17:49:23 - INFO - Loaded data from json
-2026-02-04 17:49:23 - INFO - Loading test dataset with same config as training dataset...
-2026-02-04 17:49:36 - INFO - Setting up agent...
-2026-02-04 17:49:36 - INFO - Setting up environment...
-2026-02-04 17:49:37 - INFO - Starting evaluation...
-2026-02-04 17:49:58 - INFO - terminated at step 206
-2026-02-04 17:49:58 - INFO - eval_metrics.pkl saved in /home/hurra/Projects/survey-ops/experiment_results/bc-azel-best/evaluation_1/
-2026-02-04 17:49:58 - INFO - Evaluation complete.
-2026-02-04 17:49:58 - INFO - Generating evaluation plots...
-2026-02-04 17:49:58 - INFO - Drawing plots for night 2017-1-20
-2026-02-04 17:49:59 - INFO - Creating schedule gif for 0th night
-2026-02-04 17:49:59 - INFO - Creating bin movies
-2026-02-04 17:52:08 - INFO - Creating fieldbin movies
-2026-02-04 17:53:36 - INFO - Drawing plots for night 2017-1-27
-2026-02-04 17:53:36 - INFO - Creating schedule gif for 1th night
-2026-02-04 17:53:36 - INFO - Creating bin movies
-2026-02-04 17:55:24 - INFO - Creating fieldbin movies
+2026-02-06 02:49:50 - INFO - Saving results in /home/hurra/Projects/survey-ops/experiment_results/bc-azel-best/evaluation_1/
+2026-02-06 02:49:50 - WARNING - Experiment parameters:
+2026-02-06 02:49:50 - INFO - seed: 10
+2026-02-06 02:49:50 - INFO - make_gifs: False
+2026-02-06 02:49:50 - INFO - trained_model_dir: ./
+2026-02-06 02:49:50 - INFO - evaluation_name: evaluation_1
+2026-02-06 02:49:50 - INFO - specific_years: [2016, 2017]
+2026-02-06 02:49:50 - INFO - specific_months: [1, 12]
+2026-02-06 02:49:50 - INFO - specific_days: [7, 21]
+2026-02-06 02:49:50 - INFO - specific_filters: None
+2026-02-06 02:49:50 - INFO - logging_level: info
+2026-02-06 02:49:50 - INFO - fits_path: ../data/decam-exposures-20251211.fits
+2026-02-06 02:49:50 - INFO - json_path: ../data/decam-exposures-20251211.json
+2026-02-06 02:49:50 - INFO - num_episodes: 1
+2026-02-06 02:49:50 - INFO - Loading raw data...
+2026-02-06 02:49:50 - INFO - Loaded data from json
+2026-02-06 02:49:50 - INFO - Loading test dataset with same config as training dataset...
+2026-02-06 02:50:04 - INFO - Setting up agent...
+2026-02-06 02:50:05 - INFO - Setting up environment...
+2026-02-06 02:50:05 - INFO - Starting evaluation...
+2026-02-06 02:52:12 - INFO - terminated at step 555
+2026-02-06 02:52:12 - INFO - eval_metrics.pkl saved in /home/hurra/Projects/survey-ops/experiment_results/bc-azel-best/evaluation_1/
+2026-02-06 02:52:12 - INFO - Evaluation complete.
+2026-02-06 02:52:12 - INFO - Generating evaluation plots...
+2026-02-06 02:52:12 - INFO - Drawing plots for night 2016-1-7
+2026-02-06 02:52:13 - INFO - Creating schedule gif for 0th night
+2026-02-06 02:52:13 - INFO - Creating bin movies
+2026-02-06 02:52:29 - INFO - Creating fieldbin movies
+2026-02-06 02:52:40 - INFO - Drawing plots for night 2016-12-7
+2026-02-06 02:52:40 - INFO - Creating schedule gif for 1th night
+2026-02-06 02:52:40 - INFO - Creating bin movies
+2026-02-06 02:54:25 - INFO - Creating fieldbin movies
+2026-02-06 02:55:37 - INFO - Drawing plots for night 2016-12-21
+2026-02-06 02:55:37 - INFO - Creating schedule gif for 2th night
+2026-02-06 02:55:37 - INFO - Creating bin movies
+2026-02-06 02:58:58 - INFO - Creating fieldbin movies
+2026-02-06 03:01:29 - INFO - Drawing plots for night 2017-1-7
+2026-02-06 03:01:29 - INFO - Creating schedule gif for 3th night
+2026-02-06 03:01:29 - INFO - Creating bin movies
+2026-02-06 03:02:55 - INFO - Creating fieldbin movies
+2026-02-06 03:04:11 - INFO - Drawing plots for night 2017-1-21
+2026-02-06 03:04:11 - INFO - Creating schedule gif for 4th night
+2026-02-06 03:04:11 - INFO - Creating bin movies
+2026-02-06 03:06:06 - INFO - Creating fieldbin movies

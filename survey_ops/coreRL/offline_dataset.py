@@ -54,7 +54,7 @@ def setup_feature_names(include_default_features, include_bin_features, addition
     # Include additional features not in default features above
     pointing_feature_names = required_point_features + additional_pointing_features
     if include_bin_features:
-        bin_feature_names = required_bin_features + list(set(additional_bin_features))
+        bin_feature_names = required_bin_features + np.unique(np.array(additional_bin_features)).tolist()
         bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(hpGrid.idx_lookup))])
         bin_feature_names = bin_feature_names.flatten().tolist()
     else:
@@ -329,20 +329,27 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         num_visits_hist = np.zeros_like(hour_angles, dtype=np.int32)
         num_visits_tracking = np.zeros_like(hour_angles[0])
 
-
-        do_night_num_visits = "night_num_visits" in self.base_bin_feature_names            
-        do_night_num_unvisited_fields = "night_num_unvisited_fields" in self.base_bin_feature_names            
-        do_night_num_incomplete_fields = "night_num_incomplete_fields" in self.base_bin_feature_names            
-        do_survey_num_visits = "num_visits_hist" in self.base_bin_feature_names
+        print('check this', self.base_bin_feature_names)
+        do_night_num_visits = any("night_num_visits" in name for name in self.base_bin_feature_names)
+        do_night_num_unvisited_fields = any("night_num_unvisited_fields" in name for name in self.base_bin_feature_names)
+        do_night_num_incomplete_fields = any("night_num_incomplete_fields" in name for name in self.base_bin_feature_names)
+        do_survey_num_visits = any("num_visits_hist" in name for name in self.base_bin_feature_names)
+        do_ha = any("hour_angle" in name for name in self.base_bin_feature_names)
+        do_airmass = any("airmass" in name for name in self.base_bin_feature_names)
+        do_moon_dist = any("moon_distance" in name for name in self.base_bin_feature_names)
+        do_coords = any("az" in name or "ra" in name for name in self.base_bin_feature_names)
 
         lon, lat = self.hpGrid.lon, self.hpGrid.lat
         for i, time in tqdm(enumerate(timestamps), total=len(timestamps), desc='Calculating bin features for all healpix bins and timestamps'):
-            hour_angles[i] = self.hpGrid.get_hour_angle(time=time)
-            airmasses[i] = self.hpGrid.get_airmass(time)
-            moon_dists[i] = self.hpGrid.get_source_angular_separations('moon', time=time)
-            if self.hpGrid.is_azel:
+            if do_ha:
+                hour_angles[i] = self.hpGrid.get_hour_angle(time=time)
+            if do_airmass:
+                airmasses[i] = self.hpGrid.get_airmass(time)
+            if do_moon_dist:
+                moon_dists[i] = self.hpGrid.get_source_angular_separations('moon', time=time)
+            if self.hpGrid.is_azel and do_coords:
                 xs[i], ys[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
-            else:
+            elif not self.hpGrid.is_azel and do_coords:
                 xs[i], ys[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
             # Tracks number of bins since start of *survey*
             if do_survey_num_visits:
@@ -351,7 +358,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     num_visits_tracking[bin_num] += 1
                 num_visits_hist[i] = num_visits_tracking.copy()
 
-        if any(do_night_num_visits, do_night_num_unvisited_fields, do_night_num_incomplete_fields):
+        if any([do_night_num_visits, do_night_num_unvisited_fields, do_night_num_incomplete_fields]):
             night_num_visits = np.zeros(shape=(len(df), len(self.hpGrid.idx_lookup)))
             night_num_unvisited_fields = np.zeros_like(night_num_visits)
             night_num_incomplete_fields = np.zeros_like(night_num_visits)
@@ -359,7 +366,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             for night, group in tqdm(df.groupby('night'), total=df.groupby('night').ngroups, desc='Calculating night history bin features'):
                 if not self.hpGrid.is_azel:
                     unique_field_ids, unique_field_counts = np.unique(group['field_id'][group['object'] != 'zenith'].to_numpy().astype(np.int32), return_counts=True)
-                    unique_bin_ids, unique_bin_counts = np.unique(group['bin'][group['object'] != 'zenith'], return_counts=True)
+                    # unique_bin_ids, unique_bin_counts = np.unique(group['bin'][group['object'] != 'zenith'], return_counts=True)
                     field2nvisits = {int(fid): int(c) for fid, c in zip(unique_field_ids, unique_field_counts)}
                     # bin2nvisits = {int(bid): int(c) for bid, c in zip(unique_bin_ids, unique_bin_counts)}
                     total_num_observations = len(group)
@@ -409,12 +416,13 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                     #     print("Night", night, "incomplete:", 
                     #         num_incomplete_fields_tracking[unique_bin_ids])
 
+        # Need to update this to account for choice of bin features in input cfg
         stacked = np.stack([hour_angles, airmasses, moon_dists, xs, ys, num_visits_hist], axis=2) # Order must be exactly same as base_bin_feature_names
+        stacked = np.stack([xs, ys, night_num_incomplete_fields, night_num_unvisited_fields, night_num_visits], axis=2) # Order must be exactly same as base_bin_feature_names
         bin_states = stacked.reshape(len(hour_angles), -1)
         bin_df = pd.DataFrame(data=bin_states, columns=self.base_bin_feature_names)
         bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
         bin_df['timestamp'] = timestamps
-
         # Normalize periodic features here and add as df cols
         new_cols = {}
         if self.do_cyclical_norm:

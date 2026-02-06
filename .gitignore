@@ -12,3 +12,4 @@ __pycache__/
 *.gz
 *.pkl
 *.pt
+*.gif
