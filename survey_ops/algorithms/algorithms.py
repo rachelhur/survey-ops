@@ -320,7 +320,7 @@ class BehaviorCloning(AlgorithmBase):
                 predicted_actions = predicted_actions.cpu()
                 expert_actions = expert_actions.cpu()
                 predicted_coords = np.array((hpGrid.lon[predicted_actions], hpGrid.lat[predicted_actions]))
-                expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[predicted_actions]))
+                expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[expert_actions]))
                 ang_seps = geometry.angular_separation(predicted_coords, expert_actions_coords)
                 ang_sep = ang_seps.mean()
                 # Prediction diversity
