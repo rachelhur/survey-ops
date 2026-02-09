@@ -46,8 +46,8 @@
     "FIELD2NVISITS": "field2nvisits.json"
   },
   "paths": {
-    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
-    "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
-    "SURVEY_OPS": "/home/hurra/Projects/survey-ops/"
+    "LOOKUP_DIR": "/home/rachel/Projects/survey-ops/data/lookups/",
+    "FITS_DIR": "/home/rachel/Projects/survey-ops/data/fits/",
+    "SURVEY_OPS": "/home/rachel/Projects/survey-ops/"
     }
 }

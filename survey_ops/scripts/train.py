@@ -13,7 +13,7 @@ from survey_ops.algorithms.factory import setup_algorithm
 from survey_ops.utils import geometry
 from survey_ops.utils import units
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
-from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe 
+from survey_ops.coreRL.data_processing import load_raw_data_to_dataframe 
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
 from survey_ops.utils.config import save_config, load_global_config, dict_to_nested
 
@@ -129,7 +129,7 @@ def plot_metrics(results_outdir, dataset):
 def get_args():
     parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--config', type=str, default=None, help="Path to config file. If passed, all other arguments are ignored")
+    parser.add_argument('--cfg', type=str, default=None, help="Path to config file. If passed, all other arguments are ignored")
     
     # Data input and output file and dir setups
     parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
@@ -179,11 +179,11 @@ def get_args():
     args = parser.parse_args()
 
     # If a config file is passed, overwrite the argparse defaults
-    if args.config is not None:
-        assert Path(args.config).exists(), f"Config file at {args.config} does not exist."
+    if args.cfg is not None:
+        assert Path(args.cfg).exists(), f"Config file at {args.cfg} does not exist."
             
-        with open(args.config, 'r') as f:
-            print(args.config)
+        with open(args.cfg, 'r') as f:
+            print(args.cfg)
             file_conf = json.load(f)
             for section, values in file_conf.items():
                 if isinstance(values, dict):

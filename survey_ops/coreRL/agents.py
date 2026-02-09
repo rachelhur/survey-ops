@@ -132,6 +132,7 @@ class Agent:
             loader_iter = None  # not used for manual sampling
 
         best_val_loss = 1e5
+        best_epoch = 0
         patience_cur = patience
         use_patience = patience != 0
         i_epoch = 0
@@ -182,8 +183,8 @@ class Agent:
                             # --- old method fallback ---
                             eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
 
-                        val_metric_vals = self.algorithm.test_step(eval_batch, hpGrid)
-                        val_train_metric_vals = self.algorithm.test_step(batch, hpGrid)
+                        val_metric_vals = self.algorithm.val_step(eval_batch, hpGrid)
+                        val_train_metric_vals = self.algorithm.val_step(batch, hpGrid)
 
                         for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
                             val_metrics[metric_name].append(metric_val)
@@ -193,6 +194,7 @@ class Agent:
                         val_train_metrics['epoch'].append(i_epoch)
 
                         logger.info(
+                            f"Best val loss so far {best_val_loss:.3f} at epoch {best_epoch} \n" + \
                             f"Validation check at train step {i_step} \n " + \
                                 " ".join(
                                     f"{k} = {v:.3f} | " for k, v in zip(val_metrics.keys(), val_metric_vals)

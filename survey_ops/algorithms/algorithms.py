@@ -78,8 +78,8 @@ class DDQN(AlgorithmBase):
         self.tau = tau
         self.device = device
 
-        self.policy_net = DDQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
-        self.target_net = DDQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.target_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.use_double = use_double
         self.target_update_freq = target_update_freq
@@ -94,7 +94,7 @@ class DDQN(AlgorithmBase):
 
         assert loss_fxn is not None
         self.loss_fxn = loss_fxn
-        self.val_metrics = ['val_loss', 'td_error', 'q_std', 'q_policy', 'q_expert', 'accuracy', 'total_grad_norm']
+        self.val_metrics = ['val_loss', 'td_error', 'q_std', 'q_policy', 'q_expert', 'accuracy', 'total_grad_norm', 'ang_sep', 'unique_bins']
         
     def train_step(self, batch, epoch_num, step_num):
         state, actions, rewards, next_state, dones, action_masks = batch
@@ -179,7 +179,7 @@ class DDQN(AlgorithmBase):
             action = torch.argmax(q_values).item()
         return int(action)
     
-    def test_step(self, eval_batch):
+    def val_step(self, eval_batch, hpGrid=None):
         state, actions, rewards, next_state, dones, action_masks = eval_batch
 
         with torch.no_grad():      
@@ -225,9 +225,23 @@ class DDQN(AlgorithmBase):
                 p.grad.norm() for p in self.policy_net.parameters()
                 if p.grad is not None
             ]))
-            
 
-            return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), total_norm.item()
+            if hpGrid is not None:
+                # Get angular separation
+                predicted_actions = predicted_actions.cpu()
+                expert_actions = actions.cpu()
+                predicted_coords = np.array((hpGrid.lon[predicted_actions], hpGrid.lat[predicted_actions]))
+                expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[expert_actions]))
+                ang_seps = geometry.angular_separation(predicted_coords, expert_actions_coords)
+                ang_sep = ang_seps.mean()
+                # Prediction diversity
+                num_actions = len(hpGrid.lon)
+                unique_preds = len(torch.unique(predicted_actions))
+                unique_bins = unique_preds / num_actions
+            else:
+                ang_sep = 0
+
+            return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), total_norm.item(), ang_sep, unique_bins
             
 class BehaviorCloning(AlgorithmBase):
     def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
@@ -284,7 +298,7 @@ class BehaviorCloning(AlgorithmBase):
 
         return loss.item(), None
     
-    def test_step(self, batch, hpGrid=None):
+    def val_step(self, batch, hpGrid=None):
         eval_obs, expert_actions, rewards, next_obs, dones, action_masks = batch
 
         with torch.no_grad():      

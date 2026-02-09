@@ -17,7 +17,7 @@ from survey_ops.coreRL.agents import Agent
 from survey_ops.utils.sys_utils import seed_everything
 from survey_ops.algorithms import setup_algorithm
 from survey_ops.utils.sys_utils import setup_logger, get_device
-from survey_ops.coreRL.data_loading import load_raw_data_to_dataframe
+from survey_ops.coreRL.data_processing import load_raw_data_to_dataframe
 from survey_ops.coreRL.environments import OfflineEnv
 from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
 from survey_ops.utils.config import save_config, load_global_config, dict_to_nested
