@@ -112,7 +112,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
                                   hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         
         # Get lookup tables
-        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' +  glob_cfg['files']['FIELD2NAME'], 'r') as f:
+        with open(glob_cfg['paths']['LOOKUP_DIR'] + glob_cfg['files']['FIELD2NAME'], 'r') as f:
             self.field2name = json.load(f)
 
         # Process dataframe to add columns for pointing features
@@ -240,7 +240,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         if remove_large_time_diffs:
             pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
             if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, datetimes=bin_df['datetime'], remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
                 self.bin_features = bin_features
                 self.next_bin_features = next_bin_features
                 states = np.concatenate((pointing_features, bin_features), axis=1)
@@ -250,7 +250,7 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         else:
             pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=remove_large_time_diffs)
             if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, datetimes=bin_df['datetime'], remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=None)
+                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=None)
                 self.bin_features = bin_features
                 self.next_bin_features = next_bin_features
                 states = np.concatenate((pointing_features, bin_features), axis=1)

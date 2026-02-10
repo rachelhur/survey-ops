@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from survey_ops.algorithms.algorithms import DDQN, BehaviorCloning
 
 
-def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
+def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
                     lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None, activation=None, 
-                    use_double=None):
+                    grid_network=None, n_local_features=None, n_global_features=None, n_bin_features=None, embedding_dim=None):
     assert loss_fxn is not None
     if activation == 'relu':
         activation = F.relu

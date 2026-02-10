@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.coreRL.neural_nets import DQN
+from survey_ops.coreRL.neural_nets import DQN, BinEmbeddingDQN
 from survey_ops.utils import geometry
 
 import logging
@@ -77,7 +77,7 @@ class DDQN(AlgorithmBase):
         self.gamma = gamma
         self.tau = tau
         self.device = device
-
+        
         self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
         self.target_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -245,7 +245,9 @@ class DDQN(AlgorithmBase):
             
 class BehaviorCloning(AlgorithmBase):
     def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
-                    lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu'):
+                    lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu', grid_network=None,
+                    n_local_features=None, n_global_features=None, n_bin_features=None, embedding_dim=None
+                    ):
         super().__init__()
         
         assert loss_fxn is not None, "loss_fxn needs to be passed"
@@ -253,10 +255,12 @@ class BehaviorCloning(AlgorithmBase):
 
         self.name = 'BehaviorCloning'
         self.device = device
-        self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        if grid_network is None:
+            self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        else:
+            self.policy_net = BinEmbeddingDQN(n_local_features=n_local_features, n_global_features=n_global_features, n_bin_features=n_bin_features, action_dim=num_actions, grid_network=grid_network, hidden_dim=hidden_dim, activation=activation, embedding_dim=embedding_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.lr_scheduler = self._initialize_scheduler(lr_scheduler, lr_scheduler_kwargs, self.optimizer)    
-
+        self.lr_scheduler = self._initialize_scheduler(lr_scheduler, lr_scheduler_kwargs, self.optimizer)
         if lr_scheduler is not None:
             logger.debug(f'lr_scheduler is {self.lr_scheduler}')
             self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
@@ -271,16 +275,20 @@ class BehaviorCloning(AlgorithmBase):
         state, expert_actions, rewards, next_state, dones, action_masks = batch
         
         # convert to tensors and appropriate dtypes
-        if not torch.is_tensor(state):
-            state = torch.as_tensor(state, dtype=torch.float32)
-        state = state.to(self.device)
-
-        if not torch.is_tensor(expert_actions):
-            expert_actions = torch.as_tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
-        else:
-            expert_actions = expert_actions.long() # needs to be long for .gather()
-        expert_actions = expert_actions.to(device=self.device)
-        action_logits = self.policy_net(state)
+        # if not torch.is_tensor(state):
+        #     state = torch.as_tensor(state, dtype=torch.float32)
+        # state = state.to(self.device)
+        # if not torch.is_tensor(expert_actions):
+        #     expert_actions = torch.as_tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
+        # else:
+        #     expert_actions = expert_actions.long() # needs to be long for .gather()
+        # expert_actions = expert_actions.to(device=self.device)
+         
+        # Assume batch is already tensor
+        state = state.to(device=self.device, dtype=torch.float32)
+        expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
+         
+        action_logits = self.policy_net(state, expert_actions)
         
         loss = self.loss_fxn(action_logits, expert_actions)
 

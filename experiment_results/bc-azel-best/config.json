@@ -36,6 +36,7 @@
             "dec"
         ],
         "additional_pointing_features": [],
+	"reward_choice": "expert_actions",
         "obs_dim": 22,
         "num_actions": 1504
     },

@@ -49,11 +49,10 @@ POINTING FEATURES:
 BIN FEATURES:
     "ha",
     "airmass",
-    "ang_dist_to_moon",
+    "moon_distance",
     "night_num_visits",
     "night_num_unvisited_fields",
     "night_num_incomplete_fields"
-
 """
 
 def plot_metrics(results_outdir, dataset):
@@ -291,7 +290,7 @@ def main():
     num_lr_scheduler_steps = np.max([1, int(lr_scheduler_num_epochs * steps_per_epoch)])
     lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': cfg['train']['eta_min']} if lr_scheduler == 'cosine_annealing' else {}
 
-    algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg['model']['algorithm'], 
+    algorithm = setup_algorithm(algorithm_name=cfg['model']['algorithm'], 
                                 obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg['model']['loss_function'],
                                 hidden_dim=cfg['train']['hidden_dim'], lr=cfg['train']['lr'], lr_scheduler=lr_scheduler, 
                                 device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 

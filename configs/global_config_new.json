@@ -1,0 +1,86 @@
+{
+  "features": {
+    "TIME_DEPENDENT_FEATURE_NAMES": [
+      "az",
+      "el",
+      "ha",
+      "time_fraction_since_start"
+    ],
+    "CYCLICAL_FEATURE_NAMES": [
+      "ra",
+      "az",
+      "ha"
+    ],
+    "MAX_NORM_FEATURE_NAMES": [
+      "el",
+      "dec"
+    ],
+    "INVERSE_NORM_FEATURES": [
+	  "airmass"
+	],
+	"LOCAL_FEATURES": [
+      "ra",
+      "dec",
+      "az",
+      "el",
+      "airmass",
+      "ha",
+      "sun_ra",
+      "sun_dec",
+      "sun_az",
+      "sun_el",
+      "moon_ra",
+      "moon_dec",
+      "moon_az",
+      "moon_el"
+	],
+	"GLOBAL_FEATURES": [
+		"time_fraction_since_start"
+	],
+	"BIN_FEATURES": [
+		"ha",
+    	"airmass",
+    	"moon_distance",
+    	"night_num_visits",
+    	"night_num_unvisited_fields",
+    	"night_num_incomplete_fields",
+		"az",
+		"el",
+		"ra",
+		"dec"
+	],	
+    "DEFAULT_BIN_FEATURE_NAMES": [
+    ],
+    "DEFAULT_LOCAL_FEATURE_NAMES": [
+      "ra",
+      "dec",
+      "az",
+      "el",
+      "airmass",
+      "ha",
+      "sun_ra",
+      "sun_dec",
+      "sun_az",
+      "sun_el",
+      "moon_ra",
+      "moon_dec",
+      "moon_az",
+      "moon_el"
+    ],
+	"DEFAULT_GLOBAL_FEATURE_NAMES": [
+      "time_fraction_since_start"
+	]
+  },
+  "files": {
+    "DECFITS": "decam-exposures-20251211.fits",
+    "DECJSON": "decam-exposures-20251211.json",
+    "FIELD2RADEC": "field2radec.json",
+    "FIELD2NAME": "field2name.json",
+    "FIELD2NVISITS": "field2nvisits.json"
+  },
+  "paths": {
+    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
+    "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
+    "SURVEY_OPS": "/home/hurra/Projects/survey-ops/"
+    }
+}

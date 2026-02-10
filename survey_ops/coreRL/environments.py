@@ -308,7 +308,7 @@ class OfflineEnv(BaseTelescope):
         self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
                     = setup_feature_names(include_default_features=True, include_bin_features=cfg['data']['include_bin_features'],
                                   additional_bin_features=cfg['data']['additional_bin_features'], additional_pointing_features=cfg['data']['additional_pointing_features'],
-                                  default_pntg_feature_names=glob_cfg['features']['DEFAULT_PNTG_FEATURE_NAMES'], cyclical_feature_names=self.cyclical_feature_names,
+                                  default_pntg_feature_names=glob_cfg['features']['DEFAULT_LOCAL_FEATURE_NAMES'], default_global_feature_names= glob_cfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'],
                                   default_bin_feature_names=glob_cfg['features']['DEFAULT_BIN_FEATURE_NAMES'],
                                   hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
         self.pointing_pd_nightgroup = pointing_pd_nightgroup

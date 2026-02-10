@@ -394,6 +394,7 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
     stacked = np.stack([xs, ys, night_num_incomplete_fields, night_num_unvisited_fields, night_num_visits], axis=2) # Order must be exactly same as base_bin_feature_names
     bin_states = stacked.reshape(len(hour_angles), -1)
     bin_df = pd.DataFrame(data=bin_states, columns=base_bin_feature_names)
+    bin_df['datetime'] = datetimes
     bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
     bin_df['timestamp'] = timestamps
     # Normalize periodic features here and add as df cols
@@ -463,14 +464,19 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
     
     if do_ha:
         calculated_features['ha'] = np.empty(shape=(n_timestamps, n_bins))
+        logger.info(f"Calculating ha for {n_timestamps} timestamps and {n_bins} bins")
     if do_airmass:
         calculated_features['airmass'] = np.empty(shape=(n_timestamps, n_bins))
+        logger.info(f"Calculating airmass for {n_timestamps} timestamps and {n_bins} bins")
     if do_moon_dist:
         calculated_features['moon_distance'] = np.empty(shape=(n_timestamps, n_bins))
+        logger.info(f"Calculating moon distance for {n_timestamps} timestamps and {n_bins} bins")
     if do_ra or do_az:
         calculated_features['xs'] = np.empty(shape=(n_timestamps, n_bins))  # az or ra
+        logger.info(f"Calculating xs for {n_timestamps} timestamps and {n_bins} bins")
     if do_dec or do_el:
         calculated_features['ys'] = np.empty(shape=(n_timestamps, n_bins))  # el or dec
+        logger.info(f"Calculating ys for {n_timestamps} timestamps and {n_bins} bins")
     if do_survey_num_visits:
         calculated_features['survey_num_visits_hist'] = np.zeros(shape=(n_timestamps, n_bins), dtype=np.int32)
         num_visits_tracking = np.zeros(n_bins, dtype=np.int32)
