@@ -13,14 +13,13 @@
     ],
     "MAX_NORM_FEATURE_NAMES": [
       "el",
-      "dec"
+      "dec",
+      "moon_distance"
     ],
     "INVERSE_NORM_FEATURES": [
 	  "airmass"
-	],
-    "DEFAULT_BIN_FEATURE_NAMES": [
-    ],
-    "DEFAULT_PNTG_FEATURE_NAMES": [
+	  ],
+    "LOCAL_FEATURES": [
       "ra",
       "dec",
       "az",
@@ -34,10 +33,40 @@
       "moon_ra",
       "moon_dec",
       "moon_az",
-      "moon_el",
-      "time_fraction_since_start"
-    ]
-  },
+      "moon_el"
+    ],
+    "BIN_FEATURES": [
+      "ha",
+      "airmass",
+      "moon_distance",
+      "night_num_visits",
+      "night_num_unvisited_fields",
+      "night_num_incomplete_fields",
+      "az",
+      "el",
+      "ra",
+      "dec"
+    ],	
+    "DEFAULT_BIN_FEATURE_NAMES": [
+    ],
+    "DEFAULT_GLOBAL_FEATURE_NAMES": [
+        "ra",
+        "dec",
+        "az",
+        "el",
+        "airmass",
+        "ha",
+        "sun_ra",
+        "sun_dec",
+        "sun_az",
+        "sun_el",
+        "moon_ra",
+        "moon_dec",
+        "moon_az",
+        "moon_el",
+        "time_fraction_since_start"
+      ]
+    },
   "files": {
     "DECFITS": "decam-exposures-20251211.fits",
     "DECJSON": "decam-exposures-20251211.json",
