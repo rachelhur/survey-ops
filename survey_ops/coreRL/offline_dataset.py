@@ -1,98 +1,75 @@
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Subset
 from collections import defaultdict
 
 from tqdm import tqdm
 
 from survey_ops.utils import ephemerides
-from survey_ops.coreRL.data_processing import calculate_and_add_pointing_features, calculate_and_add_bin_features, drop_rows_in_DECam_data, remove_dates, normalize_noncyclic_features, get_inst_teff_rate
+from survey_ops.coreRL.data_processing import *
 import pandas as pd
 import json
 from torch.utils.data import random_split, RandomSampler
-
-import astropy
-
+import pickle
 
 # Get the logger associated with this module's name (e.g., 'my_module')
 import logging
 logger = logging.getLogger(__name__)
 
 
-def get_lst(timestamp):
-    t = astropy.time.Time(timestamp, format='unix', scale='utc')
-    lst = t.sidereal_time('apparent', longitude=-1.2358069931456779) # blanco dec
-    return lst.to(astropy.units.rad).value
+# def get_lst(timestamp):
+#     t = astropy.time.Time(timestamp, format='unix', scale='utc')
+#     lst = t.sidereal_time('apparent', longitude=-1.2358069931456779) # blanco dec
+#     return lst.to(astropy.units.rad).value
 
 def reward_func_v0():
     raise NotImplementedError
 
-            
-def expand_feature_names_for_cyclic_norm(feature_names, cyclical_feature_names):
-    # periodic vars first
-    feature_names = [
-        element 
-        for feat_name in feature_names
-        for element in ([feat_name + '_cos', feat_name + '_sin'] 
-                        if any(string in feat_name and 'frac' not in feat_name for string in cyclical_feature_names)
-                        else [feat_name])
-]
-    return feature_names
+class TestDataset(torch.utils.data.Dataset):
+    def __init__(self):
+        pass
 
-def setup_feature_names(include_default_features, include_bin_features, additional_pointing_features, additional_bin_features,
-                        default_pntg_feature_names, default_bin_feature_names, cyclical_feature_names, hpGrid, do_cyclical_norm):
-
-    # Any experiment will likely have at least these state features
-    required_point_features = default_pntg_feature_names \
-                                if include_default_features else []
-    required_bin_features = default_bin_feature_names \
-                                if (include_default_features and include_bin_features) else []
-    
-    # Include additional features not in default features above
-    pointing_feature_names = required_point_features + additional_pointing_features
-    if include_bin_features:
-        bin_feature_names = required_bin_features + np.unique(np.array(additional_bin_features)).tolist()
-        bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}' for bin_feat in bin_feature_names] for bin_num in range(len(hpGrid.idx_lookup))])
-        bin_feature_names = bin_feature_names.flatten().tolist()
-    else:
-        bin_feature_names = []
-
-    base_pointing_feature_names = pointing_feature_names.copy()
-    base_bin_feature_names = bin_feature_names.copy()
-    base_feature_names = base_pointing_feature_names + base_bin_feature_names
-
-    # Replace cyclical features with their cyclical transforms/normalizations if on  
-    if do_cyclical_norm:
-        pointing_feature_names = expand_feature_names_for_cyclic_norm(pointing_feature_names, cyclical_feature_names)
-        bin_feature_names = expand_feature_names_for_cyclic_norm(bin_feature_names, cyclical_feature_names)
-    
-    state_feature_names = pointing_feature_names + bin_feature_names
-    return base_pointing_feature_names, base_bin_feature_names, base_feature_names, pointing_feature_names, bin_feature_names, state_feature_names
-
-class OfflineDECamDataset(torch.utils.data.Dataset):
-    def __init__(self, df=None, cfg = None, glob_cfg=None,
+class OfflineDELVEDataset(torch.utils.data.Dataset):
+    def __init__(self, df=None, cfg=None, gcfg=None,
                  specific_years=None, specific_months=None, specific_days=None, specific_filters=None):
-        assert cfg is not None, "Must pass Config object"
+        assert cfg is not None and gcfg is not None, "Must pass both cfg and gcfg"
 
         # Assign static attributes
         self.do_cyclical_norm = cfg['data']['do_cyclical_norm']
         self.do_max_norm = cfg['data']['do_max_norm']
         self.do_inverse_norm = cfg['data']['do_inverse_norm']
-        self.objects_to_remove = ["guide", "DES vvds","J0'","gwh","DESGW","Alhambra-8","cosmos","COSMOS hex","TMO","LDS","WD0","DES supernova hex","NGC","ec"]
+        self.do_ang_distance_norm = cfg['data']['do_ang_distance_norm']
+        self.objects_to_remove = ["guide", "DES vvds","J0'","gwh","DESGW","Alhambra-8","cosmos","COSMOS hex","TMO","LDS","WD0","DES supernova hex","NGC","ec", "(outlier)"]
         self.reward_choice = cfg['data']['reward_choice']
         self._calculate_action_mask = cfg['model']['algorithm'] != 'BC' # should be False if using bc (to minimize data processing time), otherwise True
+        self._grid_network = cfg['model']['grid_network']
 
         # Get global feature names
-        self.cyclical_feature_names = glob_cfg['features']['CYCLICAL_FEATURE_NAMES'] if self.do_cyclical_norm else []
-        self.max_norm_feature_names = glob_cfg['features']['MAX_NORM_FEATURE_NAMES'] if self.do_max_norm else []
+        self.cyclical_feature_names = gcfg['features']['CYCLICAL_FEATURE_NAMES'] if self.do_cyclical_norm else []
+        self.max_norm_feature_names = gcfg['features']['MAX_NORM_FEATURE_NAMES'] if self.do_max_norm else []
+        self.ang_distance_feature_names = gcfg['features']['ANG_DISTANCE_NORM_FEATURE_NAMES'] if self.do_ang_distance_norm else []
 
         # Get other configurations
         bin_space = cfg['data']['bin_space']
         binning_method = cfg['data']['bin_method']
         nside = cfg['data']['nside']
         remove_large_time_diffs = cfg['data']['remove_large_time_diffs']
-        include_bin_features = cfg['data']['include_bin_features']
+        logger.info(f'Including the following bin features: {cfg["data"]["additional_bin_features"]}')
+        logger.info(f'Including the following global features: {gcfg["features"]["DEFAULT_GLOBAL_FEATURE_NAMES"]}')
+        include_bin_features = len(cfg['data']['additional_bin_features']) > 0
         num_bins_1d = cfg['data']['num_bins_1d']
+
+        # Load lookup tables
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2NAME'], 'r') as f:
+            self.field2name = json.load(f)
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['DELVE_NIGHT2FIELDVISITS'], 'rb') as f:
+            self.night2fieldvisits = pickle.load(f)
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2RADEC'], 'r') as f:
+            self.field2radec = json.load(f)
+            self.field2radec = {int(k): v for k, v in self.field2radec.items()}
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2NVISITS'], 'r') as f:
+            self.field2maxvisits = json.load(f)
+            self.field2maxvisits = {int(k): v for k, v in self.field2maxvisits.items()}
 
         # Initialize healpix grid if binning_method is healpix
         self.hpGrid = None if binning_method != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(bin_space == 'azel'))
@@ -104,49 +81,71 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             self.num_actions = len(self.hpGrid.lon)
 
         # Save list of all feature names
-        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
-            = setup_feature_names(include_default_features=True, include_bin_features=include_bin_features,
-                                  additional_bin_features=cfg['data']['additional_bin_features'], additional_pointing_features=cfg['data']['additional_pointing_features'],
-                                  default_pntg_feature_names=glob_cfg['features']['DEFAULT_PNTG_FEATURE_NAMES'], cyclical_feature_names=self.cyclical_feature_names,
-                                  default_bin_feature_names=glob_cfg['features']['DEFAULT_BIN_FEATURE_NAMES'],
-                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
-        
-        # Get lookup tables
-        with open(glob_cfg['paths']['LOOKUP_DIR'] + glob_cfg['files']['FIELD2NAME'], 'r') as f:
-            self.field2name = json.load(f)
+        self.base_global_feature_names, self.base_bin_feature_names, self.base_feature_names, self.global_feature_names, \
+            self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
+            = setup_feature_names(include_default_features=True,
+                                  additional_bin_features=cfg['data']['additional_bin_features'],
+                                  additional_global_features=cfg['data']['additional_global_features'],
+                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], cyclical_feature_names=self.cyclical_feature_names,
+                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
+                                  grid_network=self._grid_network
+                                  )
 
-        # Process dataframe to add columns for pointing features
-        df['night'] = (df['datetime'] - pd.Timedelta(hours=12)).dt.normalize()
-        df = drop_rows_in_DECam_data(df, objects_to_remove=self.objects_to_remove)
-        df = remove_dates(df,
-                          specific_years=cfg['data']['specific_years'] if specific_years is None else specific_years, 
-                          specific_months=cfg['data']['specific_months'] if specific_months is None else specific_months, 
-                          specific_days=cfg['data']['specific_days'] if specific_days is None else specific_days,
-                          specific_filters=cfg['data']['specific_filters'] if specific_filters is None else specific_filters
-                          )
-        df = calculate_and_add_pointing_features(df=df, field2name=self.field2name, hpGrid=self.hpGrid, pointing_feature_names=self.pointing_feature_names, base_pointing_feature_names=self.base_pointing_feature_names,
-                               cyclical_feature_names=self.cyclical_feature_names, do_cyclical_norm=self.do_cyclical_norm)
-        bin_df = calculate_and_add_bin_features(pt_df=df, datetimes=df['datetime'], hpGrid=self.hpGrid, base_bin_feature_names=self.base_bin_feature_names, bin_feature_names=self.bin_feature_names, cyclical_feature_names=self.cyclical_feature_names, do_cyclical_norm=self.do_cyclical_norm)
+        # Process dataframe to add columns for global features
+        df = drop_rows_in_DECam_data(
+            df,
+            specific_years=cfg['data']['specific_years'] if specific_years is None else specific_years, 
+            specific_months=cfg['data']['specific_months'] if specific_months is None else specific_months, 
+            specific_days=cfg['data']['specific_days'] if specific_days is None else specific_days,
+            specific_filters=cfg['data']['specific_filters'] if specific_filters is None else specific_filters,
+            objects_to_remove=self.objects_to_remove
+            )
+        
+
+        df = calculate_and_add_global_features(
+            df=df, 
+            field2name=self.field2name, 
+            hpGrid=self.hpGrid, 
+            global_feature_names=self.global_feature_names, 
+            base_global_feature_names=self.base_global_feature_names,
+            cyclical_feature_names=self.cyclical_feature_names, 
+            do_cyclical_norm=self.do_cyclical_norm
+            )
+        bin_df = calculate_and_add_bin_features(
+            pt_df=df,
+            datetimes=df['datetime'],
+            hpGrid=self.hpGrid, 
+            base_bin_feature_names=self.base_bin_feature_names, 
+            prenorm_bin_feature_names=self.prenorm_bin_feature_names, 
+            bin_feature_names=self.bin_feature_names, 
+            cyclical_feature_names=self.cyclical_feature_names, 
+            do_cyclical_norm=self.do_cyclical_norm, 
+            field2radec=self.field2radec,
+            night2fieldvisits=self.night2fieldvisits,
+            field2maxvisits=self.field2maxvisits
+        )
         self._df = df # Save for diagnostics
         self._bin_df = bin_df # Save for diagnostics
-            
+                    
         # Save night dates, total number of nights in dataset, and number of obs per night
         groups_by_night = df.groupby('night')
-        self.unique_nights = groups_by_night.groups.keys()
+        self.unique_nights = df['night'].unique()
         self.n_nights = groups_by_night.ngroups
         self.n_obs_per_night = groups_by_night.size() # nights have different numbers of observations
 
         # Construct Transitions
-        states, next_states, actions, rewards, dones, action_masks, num_transitions = self._construct_transitions(
+        states, next_states, bin_states, next_bin_states, actions, rewards, dones, action_masks, num_transitions = self._construct_transitions(
             df=df, 
             bin_df=bin_df,  
             include_bin_features=include_bin_features, 
             num_bins_1d=num_bins_1d, 
             binning_method=binning_method, 
             bin_space=bin_space,
-            # timestamps=df.groupby('night').tail(-1)['timestamp'], # all but zenith timestamps,
             remove_large_time_diffs=remove_large_time_diffs
             )
+        
+        logger.debug(f"States shape: {states.shape}, Actions shape: {actions.shape}, Rewards shape: {rewards.shape}, Next states shape: {next_states.shape}, Dones shape: {dones.shape}, Action masks shape: {action_masks.shape}")
+        logger.debug(f"Bin states shape: {bin_states.shape if bin_states is not None else None}, Next bin states shape: {next_bin_states.shape if next_bin_states is not None else None}")
 
         self.num_transitions = num_transitions
 
@@ -157,28 +156,65 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         self.rewards = torch.tensor(rewards, dtype=torch.float32)
         self.dones = torch.tensor(dones, dtype=torch.bool)
         self.action_masks = torch.tensor(action_masks, dtype=torch.bool)
+        if include_bin_features:
+            self.bin_states = torch.tensor(bin_states, dtype=torch.float32)
+            self.next_bin_states = torch.tensor(next_bin_states, dtype=torch.float32)
+        else:
+            self.bin_states = None
+            self.next_bin_states = None
         
         # Set dimension of observation
-        self.obs_dim = self.states.shape[-1]
+        self.state_dim = self.states.shape[-1]
+        if self._grid_network == 'single_bin_scorer':
+            self.bin_state_dim = self.bin_states.shape[-1]
 
         # Normalize states and next_states
         self.states = normalize_noncyclic_features(
-            self.states,
-            self.state_feature_names,
-            self.max_norm_feature_names,
-            self.do_inverse_norm,
-            self.do_max_norm,
+            state=self.states,
+            state_feature_names=self.state_feature_names,
+            max_norm_feature_names=self.max_norm_feature_names,
+            ang_distance_norm_feature_names=self.ang_distance_feature_names,
+            do_inverse_norm=self.do_inverse_norm,
+            do_max_norm=self.do_max_norm,
+            do_ang_distance_norm=self.do_ang_distance_norm,
             fix_nans=True
         )
         self.next_states = normalize_noncyclic_features(
-            self.next_states,
-            self.state_feature_names,
-            self.max_norm_feature_names,
-            self.do_inverse_norm,
-            self.do_max_norm,
+            state=self.next_states,
+            state_feature_names=self.state_feature_names,
+            max_norm_feature_names=self.max_norm_feature_names,
+            ang_distance_norm_feature_names=self.ang_distance_feature_names,
+            do_inverse_norm=self.do_inverse_norm,
+            do_max_norm=self.do_max_norm,
+            do_ang_distance_norm=self.do_ang_distance_norm,
             fix_nans=True
         )
-        assert self.states.shape[0] == self.actions.shape[0] == self.rewards.shape[0] == self.next_states.shape[0] == self.dones.shape[0] == self.action_masks.shape[0], f"Shape mismatch: states {self.states.shape}, actions {self.actions.shape}, rewards {self.rewards.shape}, next_states {self.next_states.shape}, dones {self.dones.shape}, action_masks {self.action_masks.shape}"
+
+        if self._grid_network == 'single_bin_scorer':
+            self.bin_states = normalize_noncyclic_features(
+                state=self.bin_states,
+                state_feature_names=self.bin_feature_names,
+                max_norm_feature_names=self.max_norm_feature_names,
+                ang_distance_norm_feature_names=self.ang_distance_feature_names,
+                do_inverse_norm=self.do_inverse_norm,
+                do_max_norm=self.do_max_norm,
+                do_ang_distance_norm=self.do_ang_distance_norm,
+                fix_nans=True
+            )
+            self.next_bin_states = normalize_noncyclic_features(
+                state=self.next_bin_states,
+                state_feature_names=self.bin_feature_names,
+                max_norm_feature_names=self.max_norm_feature_names,
+                ang_distance_norm_feature_names=self.ang_distance_feature_names,
+                do_inverse_norm=self.do_inverse_norm,
+                do_max_norm=self.do_max_norm,
+                do_ang_distance_norm=self.do_ang_distance_norm,
+                fix_nans=True
+            )
+        if include_bin_features:
+            assert self.states.shape[0] == self.actions.shape[0] == self.rewards.shape[0] == self.next_states.shape[0] == self.dones.shape[0] == self.action_masks.shape[0] == self.bin_states.shape[0] == self.next_bin_states.shape[0], f"Shape mismatch: states {self.states.shape}, actions {self.actions.shape}, rewards {self.rewards.shape}, next_states {self.next_states.shape}, dones {self.dones.shape}, action_masks {self.action_masks.shape}, bin_states {self.bin_states.shape}, next_bin_states {self.next_bin_states.shape}"
+        else:
+            assert self.states.shape[0] == self.actions.shape[0] == self.rewards.shape[0] == self.next_states.shape[0] == self.dones.shape[0] == self.action_masks.shape[0], f"Shape mismatch: states {self.states.shape}, actions {self.actions.shape}, rewards {self.rewards.shape}, next_states {self.next_states.shape}, dones {self.dones.shape}, action_masks {self.action_masks.shape}"
         # self._do_noncyclic_normalizations()
 
     def _construct_transitions(self, df, bin_df, include_bin_features, num_bins_1d, binning_method, bin_space, remove_large_time_diffs):
@@ -186,15 +222,44 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             next_state_idxs = self._get_next_state_indices(df)
         else:
             next_state_idxs = None
-        states, next_states = self._construct_states(df=df, bin_df=bin_df, include_bin_features=include_bin_features, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+        states, next_states, bin_features, next_bin_features = self._construct_states(df=df, bin_df=bin_df, include_bin_features=include_bin_features, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
         num_transitions = states.shape[0]
         actions = self._construct_actions(df, next_states=next_states, bin_space=bin_space, binning_method=binning_method, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs, num_bins_1d=num_bins_1d)
         rewards = self._construct_rewards(df, next_state_idxs=next_state_idxs, remove_large_time_diffs=remove_large_time_diffs, reward_choice=self.reward_choice)
         dones = np.zeros(num_transitions, dtype=bool) # False unless last observation of the night
         dones[-1] = True
+        # dones = df.groupby('night').apply(lambda x: [False]*(len(x)-1) + [True]).explode().values.astype(bool)
+        # dones = df.groupby('night').apply(lambda x: [False]*(len(x)-1) + [True]).explode().values
         action_masks = self._construct_action_masks(df=df, num_transitions=num_transitions, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
-        return states, next_states, actions, rewards, dones, action_masks, num_transitions
-        
+        return states, next_states, bin_features, next_bin_features, actions, rewards, dones, action_masks, num_transitions
+
+    def _construct_states(self, df, bin_df, include_bin_features, remove_large_time_diffs, next_state_idxs):
+        if remove_large_time_diffs:
+            global_features, next_global_features = self._construct_global_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
+            if include_bin_features:
+                bin_states, next_bin_states = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+                self.bin_states = bin_states
+                self.next_bin_states = next_bin_states
+                if self._grid_network is None:
+                    states = np.concatenate((global_features, bin_states), axis=1)
+                    next_states = np.concatenate((next_global_features, next_bin_states), axis=1)
+                    return states, next_states, bin_states, next_bin_states
+                elif self._grid_network == 'single_bin_scorer':
+                    return global_features, next_global_features, bin_states, next_bin_states
+                else:
+                    raise NotImplementedError(f"Grid network type {self._grid_network} not implemented for state construction.")
+            return global_features, next_global_features, None, None
+        else:
+            global_features, next_global_features = self._construct_global_features(df=df, remove_large_time_diffs=remove_large_time_diffs)
+            if include_bin_features:
+                bin_states, next_bin_states = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=None)
+                self.bin_states = bin_states
+                self.next_bin_states = next_bin_states
+                states = np.concatenate((global_features, bin_states), axis=1)
+                next_states = np.concatenate((next_global_features, next_bin_states), axis=1)
+                return states, next_states
+            return global_features, next_global_features
+    
     def _get_next_state_indices(self, df, max_time_diff_min=10):
         time_diffs = df['timestamp'].diff().values
         keep = time_diffs < max_time_diff_min * 60 + 90
@@ -203,60 +268,53 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         logger.debug(f'Removing {np.sum(~keep)} transitions with large time diffs > {max_time_diff_min} min. Total transitions: {len(keep)}')
         return next_state_idxs
 
-    def _construct_pointing_features(self, df, remove_large_time_diffs, next_state_idxs=None):
+    def _construct_global_features(self, df, remove_large_time_diffs, next_state_idxs=None):
         """
         Constructs state and next_states for all transitions.
         Inserts a "null" observation before the first observation each night.
         The null observation state is defined as being an array of zeros
         """
-        # Pointing features already in DECam data
-        missing_cols = set(self.pointing_feature_names) - set(df.columns) == 0
+        # global features already in DECam data
+        missing_cols = set(self.global_feature_names) - set(df.columns) == 0
         assert missing_cols == 0, f'Features {missing_cols} do not exist in dataframe. Must be implemented in method self._process_dataframe()'
         if remove_large_time_diffs:
             next_state_df = df.iloc[next_state_idxs]
             current_state_df = df.iloc[next_state_idxs - 1]
-            pointing_features = current_state_df[self.pointing_feature_names].to_numpy()
-            next_pointing_features = next_state_df[self.pointing_feature_names].to_numpy()
+            global_features = current_state_df[self.global_feature_names].to_numpy()
+            next_global_features = next_state_df[self.global_feature_names].to_numpy()
         else:
-            pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
-            next_pointing_features = df.groupby('night')[self.pointing_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
-        return pointing_features, next_pointing_features
+            global_features = df.groupby('night')[self.global_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+            next_global_features = df.groupby('night')[self.global_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
+        return global_features, next_global_features
         
     def _construct_bin_features(self, bin_df, remove_large_time_diffs, next_state_idxs):
         # Get bin_features and next_bin_features
         if remove_large_time_diffs:
-            next_state_df = bin_df.iloc[next_state_idxs]
-            current_state_df = bin_df.iloc[next_state_idxs - 1]
-            bin_features = current_state_df[self.bin_feature_names].to_numpy()
-            next_bin_features = next_state_df[self.bin_feature_names].to_numpy()
+            next_bindf = bin_df.iloc[next_state_idxs][self.bin_feature_names]
+            bindf = bin_df.iloc[next_state_idxs - 1][self.bin_feature_names]
+            if self._grid_network is None:
+                bin_states = bindf.to_numpy()
+                next_bin_states = next_bindf.to_numpy()
+            elif self._grid_network == 'single_bin_scorer':
+                nrows, ncols = bindf.shape
+                num_feats_per_bin = int(ncols / self.num_actions)
+                bin_states = bindf.to_numpy().reshape((nrows, self.num_actions, num_feats_per_bin))
+                next_bin_states = next_bindf.to_numpy().reshape((nrows, self.num_actions, num_feats_per_bin))
+            else:
+                raise NotImplementedError(f"Grid network type {self._grid_network} not implemented for bin feature construction.")
         else:
-            bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
-            next_bin_features = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
-
-        self._bin_df = bin_df
-        return bin_features, next_bin_features
-    
-    def _construct_states(self, df, bin_df, include_bin_features, remove_large_time_diffs, next_state_idxs):
-        if remove_large_time_diffs:
-            pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
-            if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
-                self.bin_features = bin_features
-                self.next_bin_features = next_bin_features
-                states = np.concatenate((pointing_features, bin_features), axis=1)
-                next_states = np.concatenate((next_pointing_features, next_bin_features), axis=1)
-                return states, next_states
-            return pointing_features, next_pointing_features
-        else:
-            pointing_features, next_pointing_features = self._construct_pointing_features(df=df, remove_large_time_diffs=remove_large_time_diffs)
-            if include_bin_features:
-                bin_features, next_bin_features = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=None)
-                self.bin_features = bin_features
-                self.next_bin_features = next_bin_features
-                states = np.concatenate((pointing_features, bin_features), axis=1)
-                next_states = np.concatenate((next_pointing_features, next_bin_features), axis=1)
-                return states, next_states
-            return pointing_features, next_pointing_features
+            if self._grid_network is None:
+                bin_states = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :]).to_numpy()
+                next_bin_states = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :]).to_numpy()
+            elif self._grid_network == 'single_bin_scorer':
+                bindf = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[:-1, :])
+                next_bindf = bin_df.groupby('night')[self.bin_feature_names].apply(lambda group: group.iloc[1:, :])
+                A, B = bindf.shape
+                bin_states = bindf.to_numpy().reshape((A, self.num_actions, int(B / self.num_actions)))
+                next_bin_states = next_bindf.to_numpy().reshape((A, self.num_actions, int(B / self.num_actions)))
+            else:
+                raise NotImplementedError(f"Grid network type {self._grid_network} not implemented for bin feature construction.")
+        return bin_states, next_bin_states
     
     def _construct_actions(self, df, next_states, bin_space, binning_method, remove_large_time_diffs, next_state_idxs, num_bins_1d=None):
         assert bin_space in ['radec', 'azel'], 'bin_space must be radec or azel'
@@ -325,15 +383,15 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         # given timestamp, determine bins which are outside of observable range
         els = np.empty((num_transitions, self.num_actions))
         if self._calculate_action_mask:
-            print("Calculating action masks based on horizon. This may take a few minutes...")
+            logger.info("Calculating action masks based on horizon. This may take a few minutes...")
             if not self.hpGrid.is_azel:
                 lon, lat = self.hpGrid.lon, self.hpGrid.lat
                 for i, time in tqdm(enumerate(df['timestamp'].values), total=len(df['timestamp'].values), desc="Calculating action mask"):
-                    _, els[i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
+                    _, els[i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
                 self._els = els
                 action_mask = els > 0
             else:
-                els = np.tile(self.hpGrid.lon[:, np.newaxis], reps=len(df['timestamp'].values)).T
+                els = np.tile(self.hpGrid.lat[:, np.newaxis], reps=len(df['timestamp'].values)).T
                 action_mask = els > 0
         else:
             action_mask = np.ones((num_transitions, self.num_actions))
@@ -343,17 +401,83 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
         return self.states.shape[0]
 
     def __getitem__(self, idx):
-        transition = (
-            self.states[idx],
-            self.actions[idx],
-            self.rewards[idx],
-            self.next_states[idx],
-            self.dones[idx],
-            self.action_masks[idx]
-        )
+        if self._grid_network is None:
+            transition = (
+                self.states[idx],
+                self.actions[idx],
+                self.rewards[idx],
+                self.next_states[idx],
+                self.dones[idx],
+                self.action_masks[idx],
+                torch.tensor(0), # placeholder for bin state since not used in this case
+                torch.tensor(0)
+            )
+        elif self._grid_network == 'single_bin_scorer':
+            transition = (
+                self.states[idx],
+                self.actions[idx],
+                self.rewards[idx],
+                self.next_states[idx],
+                self.dones[idx],
+                self.action_masks[idx],
+                self.bin_states[idx], # shape (ntransitions, nbins, nfeatures)
+                self.next_bin_states[idx]
+            )
         return transition
     
     def get_dataloader(self, batch_size, num_workers, pin_memory, random_seed, drop_last=True, val_split=.1, return_train_and_val=True):
+        generator = torch.Generator().manual_seed(random_seed)
+        np.random.seed(random_seed) # Ensure consistent night selection
+        
+        # 1. Randomly sample whole nights for the validation set
+        num_val_nights = max(1, int(self.n_nights * val_split))
+        val_nights = np.random.choice(self.unique_nights, size=num_val_nights, replace=False)
+        logger.info(f'Choosing {num_val_nights} nights for validation out of {self.n_nights} nights. Specifically, {val_nights}')
+        
+        # 2. Track which night each transition belongs to
+        # We must handle the two different ways states are constructed
+        if hasattr(self, 'next_state_idxs') and self.next_state_idxs is not None:
+            # When remove_large_time_diffs is True
+            transition_nights = self._df.iloc[self.next_state_idxs - 1]['night']
+        else:
+            # When remove_large_time_diffs is False
+            transition_nights = self._df.groupby('night')['night'].apply(lambda x: x.iloc[:-1])
+            
+        # 3. Create boolean mask mapping transitions to the selected val nights
+        # print(transition_nights, val_nights)
+        val_mask = np.isin(transition_nights, val_nights)
+        
+        # 4. Extract the exact indices for train and val subsets
+        train_indices = np.where(~val_mask)[0].tolist()
+        val_indices = np.where(val_mask)[0].tolist()
+        
+        # 5. Create Subsets
+        train_dataset = Subset(self, train_indices)
+        val_dataset = Subset(self, val_indices)
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=RandomSampler(train_dataset, replacement=True, num_samples=10**10, generator=generator),
+            drop_last=drop_last,
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+        
+        if return_train_and_val:
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False, 
+                drop_last=False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+            return train_loader, val_loader
+            
+        return train_loader
+
+    def old_get_dataloader(self, batch_size, num_workers, pin_memory, random_seed, drop_last=True, val_split=.1, return_train_and_val=True):
         generator = torch.Generator().manual_seed(random_seed)
     
         # Split dataset
@@ -383,20 +507,6 @@ class OfflineDECamDataset(torch.utils.data.Dataset):
             return train_loader, val_loader
         return train_loader
 
-        # loader = DataLoader(
-        #     self,
-        #     batch_size,
-        #     sampler=RandomSampler(
-        #         self,
-        #         replacement=True,
-        #         num_samples=10**10,
-        #     ),
-        #     drop_last=drop_last, # drops last non-full batch
-        #     num_workers=num_workers,
-        #     pin_memory=pin_memory,
-        #     generator=generator
-        # )
- 
 class ToyDatasetv0:
     """
     A dataset wrapper converting a nightly telescope schedule into a structured transition dataset.
@@ -538,3 +648,4 @@ class ToyDatasetv0:
             np.array(self.dones[night_indices, obs_indices], dtype=np.bool_),
             np.array(self.action_masks[night_indices, obs_indices], dtype=bool),
         )
+    

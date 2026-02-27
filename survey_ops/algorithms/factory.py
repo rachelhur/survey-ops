@@ -7,21 +7,34 @@ import torch.nn.functional as F
 
 from survey_ops.algorithms.algorithms import DDQN, BehaviorCloning
 
-
-def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
+def setup_algorithm(algorithm_name=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
                     lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None, activation=None, 
-                    grid_network=None, n_local_features=None, n_global_features=None, n_bin_features=None, embedding_dim=None):
+                    grid_network=None, n_global_features=None, n_bin_features=0, embedding_dim=None):
     assert loss_fxn is not None
-    if activation == 'relu':
-        activation = F.relu
-    elif activation == 'mish':
-        activation = F.mish
-    elif activation == 'swish':
-        activation = F.silu
+    # Initialize activation functions
+    if type(activation) == str:
+        if activation == 'relu':
+            activation = nn.ReLU
+        elif activation == 'mish':
+            activation = nn.Mish
+        elif activation == 'swish':
+            activation = nn.SiLU
+        else:
+            raise NotImplementedError(f"Activation function '{activation}' not implemented.")
+
+    # Initialize activation functions
+    if type(loss_fxn) == str:
+        if loss_fxn == 'mse':
+            loss_fxn = nn.MSELoss(reduction='mean')
+        elif loss_fxn == 'huber':
+            loss_fxn = nn.HuberLoss(reduction='mean')
+        elif loss_fxn == 'cross_entropy':
+            loss_fxn = nn.CrossEntropyLoss(reduction='mean')
+        elif loss_fxn == 'mse':
+            loss_fxn = nn.MSELoss(reduction='mean')
         
     # Set up model hyperparameters that are algorithm independent
     model_hyperparams = {
-        'obs_dim': obs_dim,
         'num_actions': num_actions, 
         'hidden_dim': hidden_dim,
         'lr': lr,
@@ -30,7 +43,11 @@ def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fx
         'lr_scheduler_epoch_start': lr_scheduler_epoch_start,
         'lr_scheduler_num_epochs': lr_scheduler_num_epochs,
         'loss_fxn': loss_fxn,
-        'activation': activation
+        'activation': activation,
+        'grid_network': grid_network,
+        'n_global_features': n_global_features,
+        'n_bin_features': n_bin_features,
+        'embedding_dim': embedding_dim
     }
         
     if algorithm_name == 'DDQN' or algorithm_name == 'DQN':
@@ -40,15 +57,11 @@ def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fx
         
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
-        elif loss_fxn == 'mse':
-            loss_fxn = nn.MSELoss(reduction='mean')
-        elif loss_fxn == 'huber':
-            loss_fxn = nn.HuberLoss(reduction='mean')
+
         else:
-            print(loss_fxn)
             raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
 
-        model_hyperparams .update( {
+        model_hyperparams.update( {
             'gamma': gamma,
             'tau': tau,
             'use_double': algorithm_name == 'ddqn',
@@ -63,12 +76,7 @@ def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fx
     elif algorithm_name == 'BC':
         if loss_fxn is not None and type(loss_fxn) != str:
             loss_fxn = loss_fxn
-        elif loss_fxn == 'cross_entropy':
-            loss_fxn = nn.CrossEntropyLoss(reduction='mean')
-        elif loss_fxn == 'mse':
-            loss_fxn = nn.MSELoss(reduction='mean')
         else:
-            print(loss_fxn)
             raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
         
         model_hyperparams.update({
@@ -79,6 +87,6 @@ def setup_algorithm(algorithm_name=None, obs_dim=None, num_actions=None, loss_fx
             **model_hyperparams
         )
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"{algorithm_name} not yet implemented")
     return algorithm
 

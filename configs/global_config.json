@@ -9,16 +9,20 @@
     "CYCLICAL_FEATURE_NAMES": [
       "ra",
       "az",
-      "ha"
+      "ha",
+      "lst"
     ],
     "MAX_NORM_FEATURE_NAMES": [
       "el",
       "dec",
       "moon_distance"
     ],
-    "INVERSE_NORM_FEATURES": [
+    "INVERSE_NORM_FEATURES_NAMES": [
 	  "airmass"
 	  ],
+    "ANG_DISTANCE_NORM_FEATURE_NAMES": [
+      "distance"
+    ],
     "LOCAL_FEATURES": [
       "ra",
       "dec",
@@ -33,19 +37,26 @@
       "moon_ra",
       "moon_dec",
       "moon_az",
-      "moon_el"
+      "moon_el",
+      "filter_wave",
+      "lst",
+      "time_fraction_since_start"
     ],
     "BIN_FEATURES": [
       "ha",
       "airmass",
       "moon_distance",
-      "night_num_visits",
       "night_num_unvisited_fields",
       "night_num_incomplete_fields",
+      "night_min_tiling",
+      "survey_num_unvisited_fields",
+      "survey_num_incomplete_fields",
+      "survey_min_tiling",
       "az",
       "el",
       "ra",
-      "dec"
+      "dec",
+      "angular_distance_to_pointing"
     ],	
     "DEFAULT_BIN_FEATURE_NAMES": [
     ],
@@ -72,7 +83,8 @@
     "DECJSON": "decam-exposures-20251211.json",
     "FIELD2RADEC": "field2radec.json",
     "FIELD2NAME": "field2name.json",
-    "FIELD2NVISITS": "field2nvisits.json"
+    "FIELD2NVISITS": "field2nvisits.json",
+    "DELVE_NIGHT2FIELDVISITS": "offlineDELVE_visit_history.pkl"
   },
   "paths": {
     "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",

@@ -14,7 +14,7 @@ from survey_ops.utils import geometry
 from survey_ops.utils import units
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
 from survey_ops.coreRL.data_processing import load_raw_data_to_dataframe 
-from survey_ops.coreRL.offline_dataset import OfflineDECamDataset
+from survey_ops.coreRL.offline_dataset import OfflineDELVEDataset
 from survey_ops.utils.config import save_config, load_global_config, dict_to_nested
 
 import argparse
@@ -25,36 +25,6 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1] 
 
-"""
-Features implemented so far:
-POINTING FEATURES:
-    "ra",
-    "dec",
-    "az",
-    "el",
-    "airmass",
-    "ha",
-    "sun_ra",
-    "sun_dec",
-    "sun_az",
-    "sun_el",
-    "moon_ra",
-    "moon_dec",
-    "moon_az",
-    "moon_el",
-    "time_fraction_since_start"
-    "bins_visited_in_night": Number of unique bins visited so far in the night
-
-
-BIN FEATURES:
-    "ha",
-    "airmass",
-    "moon_distance",
-    "night_num_visits",
-    "night_num_unvisited_fields",
-    "night_num_incomplete_fields"
-"""
-
 def plot_metrics(results_outdir, dataset):
     with open(results_outdir / 'train_metrics.pkl', 'rb') as f:
         train_metrics = pickle.load(f)
@@ -62,38 +32,22 @@ def plot_metrics(results_outdir, dataset):
         val_metrics = pickle.load(f)
     with open(results_outdir / 'val_train_metrics.pkl', 'rb') as f:
         val_train_metrics = pickle.load(f)
-    # val_steps = np.linspace(0, len(train_metrics['train_loss']), len(val_metrics['accuracy']))
 
-    # Plot train and val loss
-    fig, axs = plt.subplots(4, sharex=True, figsize=(5, 12))
+    # Plot Loss, Accuracy, and Angular separation
+    nrows = 3 if 'ang_sep' in val_metrics else 2
+    fig, axs = plt.subplots(nrows, sharex=True, figsize=(4, 7))
 
-    axs[0].plot(train_metrics['epoch'], train_metrics['train_loss'], label='train loss', color='grey', alpha=.5, linestyle='dotted')
+    axs[0].plot(train_metrics['epoch'], train_metrics['train_loss'], label='train loss', color='black', linestyle='dotted')
     axs[0].plot(val_metrics['epoch'], val_metrics['val_loss'], label='val loss')
     axs[0].hlines(y=0, xmin=0, xmax=np.max(val_metrics['epoch']), color='red', linestyle='dashed')
     axs[0].set_ylabel('Loss', fontsize=14)
-    axs[0].legend()
+    axs[0].legend(fontsize=12)
 
-    axs[1].plot(val_train_metrics['epoch'], val_train_metrics['accuracy'], label='train accuracy', color='grey', alpha=.5, linestyle='dotted')
+    axs[1].plot(val_train_metrics['epoch'], val_train_metrics['accuracy'], label='train accuracy', color='black', linestyle='dotted')
     axs[1].plot(val_metrics['epoch'], val_metrics['accuracy'], label='val accuracy')
     axs[1].hlines(y=1, xmin=0, xmax=np.max(train_metrics['epoch']), color='red', linestyle='dotted')
     axs[1].set_ylabel('Accuracy', fontsize=14)
-    axs[1].legend()
-
-    axs[2].scatter(train_metrics['epoch'], train_metrics['lr'], marker='o', s=10)
-    axs[2].set_ylabel('LR', fontsize=14)
-
-    i = 0
-    for key in val_metrics.keys():
-        if key != 'accuracy' and key != 'epoch' and 'loss' not in key:
-            axs[3].plot(val_metrics['epoch'], val_metrics[key], label='val ' + key, color=f"C{i}")
-            axs[3].plot(val_metrics['epoch'], val_train_metrics[key], color=f"C{i}", linestyle='dotted', alpha=.5)
-            i += 1
-    axs[3].hlines(0, xmin=0, xmax=np.max(val_metrics['epoch']), linestyle='--', color='red')
-    axs[3].legend()
-    axs[3].set_xlabel('Epoch', fontsize=14)
-
-    fig.tight_layout()
-    fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')
+    axs[1].legend(fontsize=12)
 
     if 'ang_sep' in val_metrics:
         lonlat = np.array((dataset.hpGrid.lon, dataset.hpGrid.lat))
@@ -101,15 +55,32 @@ def plot_metrics(results_outdir, dataset):
         pos2 = lonlat[:, 1:]
         ang_seps = geometry.angular_separation(pos1=pos1, pos2=pos2)
         average_bin_sep = np.mean(ang_seps)
-        fig, ax = plt.subplots()
-        ax.plot(val_train_metrics['epoch'], val_train_metrics['ang_sep'], label='train', color='grey', alpha=.5, linestyle='dotted')
-        ax.plot(val_metrics['epoch'], val_metrics['ang_sep'], label='val')
-        ax.set_ylabel('Angular separation (rad)', fontsize=14)
-        ax.set_xlabel('Epoch')
-        ax.hlines(y=average_bin_sep, xmin=0, xmax=np.max(val_train_metrics['epoch']), label='average bin center separation', color='black', linestyle='dotted')
-        ax.legend(fontsize=12)
-        fig.tight_layout()
-        fig.savefig(results_outdir / 'figures' / 'angular_separation_history.png')
+
+        axs[2].plot(val_train_metrics['epoch'], np.array(val_train_metrics['ang_sep'])/units.deg, label='train', color='black', linestyle='dotted')
+        axs[2].plot(val_metrics['epoch'], np.array(val_metrics['ang_sep'])/units.deg, label='val')
+        axs[2].set_ylabel('Angular separation \n (deg)', fontsize=14)
+        axs[2].set_xlabel('Epoch')
+        axs[2].hlines(y=average_bin_sep/units.deg, xmin=0, xmax=np.max(val_train_metrics['epoch']), label='average bin sep', color='red', linestyle='dashed')
+        axs[2].legend(fontsize=12)
+
+    for ax in axs:
+        ax.grid(True, alpha=.5)
+
+    fig.tight_layout()
+    fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')    
+
+    i = 0
+    fig, ax = plt.subplots()
+    for key in val_metrics.keys():
+        if key != 'accuracy' and key != 'epoch' and 'loss' not in key and key != 'ang_sep':
+            ax.plot(val_metrics['epoch'], val_metrics[key], label='val ' + key, color=f"C{i}")
+            ax.plot(val_metrics['epoch'], val_train_metrics[key], color=f"C{i}", linestyle='dotted')
+            i += 1
+    ax.grid(True, alpha=.5)
+    ax.legend()
+    ax.set_xlabel('Epoch', fontsize=14)
+    fig.tight_layout()
+    fig.savefig(results_outdir / 'figures' / 'val_metrics.png')
 
     if 'unique_bins' in val_metrics:
         # Count bins with < 10 examples
@@ -124,11 +95,20 @@ def plot_metrics(results_outdir, dataset):
         ax.legend(fontsize=12)
         fig.tight_layout()
         fig.savefig(results_outdir / 'figures' / 'unique_bins_history.png')
+    
+    fig, ax = plt.subplots()
+    ax.grid(True, alpha=.5)
+    ax.plot(train_metrics['epoch'], train_metrics['lr'])
+    ax.set_xlabel('Epoch', fontsize=14)
+    ax.set_ylabel('LR', fontsize=14)
+    fig.tight_layout()
+    fig.savefig(results_outdir / 'figures' / 'lr_steps.png')
+    
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--cfg', type=str, default=None, help="Path to config file. If passed, all other arguments are ignored")
+    parser.add_argument('-c', '--cfg', type=str, default=None, help="Path to config file. If passed, all other arguments are ignored")
     
     # Data input and output file and dir setups
     parser.add_argument('--fits_path', type=str, default='../data/decam-exposures-20251211.fits', help='Path to offline dataset file')
@@ -154,7 +134,6 @@ def get_args():
     parser.add_argument('--data.specific_days', type=int, nargs='*', default=None, help='Specific days to include in the dataset')
     parser.add_argument('--data.specific_filters', type=str, nargs='*', default=None, help='Specific filters to include in the dataset')
     # parser.add_argument('--include_default_features', action='store_true', help='Whether to include default features in the dataset')
-    parser.add_argument('--data.include_bin_features', action='store_true', help='Whether to include bin features in the dataset')
     parser.add_argument('--data.do_cyclical_norm', action='store_true', help='Whether to apply cyclical normalization to the features')
     parser.add_argument('--data.do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
     parser.add_argument('--data.do_inverse_norm', action='store_true', help='Whether to include inverse normalizations to features')
@@ -210,7 +189,6 @@ def main():
     logging.getLogger("gymnasium").setLevel(logging.WARNING)
     logging.getLogger("fontconfig").setLevel(logging.WARNING)
     logging.getLogger("cartopy").setLevel(logging.WARNING)
-    logger.info(f'Setting outdir {results_outdir}')
 
     # Get training configs used more than once
     batch_size = cfg['train']['batch_size'] #cfg.get('experiment.training.batch_size')
@@ -219,12 +197,12 @@ def main():
     lr_scheduler_epoch_start = cfg['train']['lr_scheduler_epoch_start'] #cfg.get('experiment.training.lr_scheduler_epoch_start')
     lr_scheduler_num_epochs = cfg['train']['lr_scheduler_num_epochs'] #cfg.get('experiment.training.lr_scheduler_num_epochs')
     bin_space = cfg['data']['bin_space'] #cfg.get('experiment.data.bin_space')
-    if bin_space == 'azel':
-        cfg['data']['additional_bin_features'] += ['ra', 'dec']
+    if cfg['data']['additional_bin_features'] is not None:
+        cfg['data']['additional_bin_features'] = list(set(cfg['data']['additional_bin_features']))
     else:
-        cfg['data']['additional_bin_features'] += ['az', 'el']
-    cfg['data']['additional_bin_features'] = list(set(cfg['data']['additional_bin_features']))
-    
+        cfg['data']['additional_bin_features'] = []
+    for bin_feat in cfg['data']['additional_bin_features']:
+        assert bin_feat in global_cfg['features']['BIN_FEATURES'], f"{bin_feat} has not yet been implemented. Check global config file for valid inputs."
     # assert errors dne before running rest of code
     if lr_scheduler is not None:
         assert max_epochs - lr_scheduler_epoch_start - lr_scheduler_num_epochs >= 0, "The number of epochs must be greater than lr_scheduler_epoch_start + lr_scheduler_num_epochs"
@@ -238,17 +216,22 @@ def main():
 
     logger.info("Loading raw data...")
 
-    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECFITS']), 
-                                    Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECJSON']))
+    df = load_raw_data_to_dataframe(Path(global_cfg['paths']['FITS_DIR']) / Path(global_cfg['files']['DECFITS']))
 
     logger.info("Processing raw data into OfflineDataset()...")
     # Need to include paths.lookup_dir in cfg before sending to offline dataset -- brittle
-    train_dataset = OfflineDECamDataset(
+    # train_dataset = OfflineDELVEDataset(
+    #     df=df,
+    #     cfg=cfg,
+    #     gcfg=global_cfg,
+    # )
+    train_dataset = OfflineDELVEDataset(
         df=df,
         cfg=cfg,
-        glob_cfg=global_cfg
+        gcfg=global_cfg,
         )
-    logger.info("Finished constructing train_dataset")
+    logger.info("Finished constructing train_dataset.")
+    logger.info(f"Train dataset has {train_dataset.n_nights} nights and {train_dataset.num_transitions} transitions")
 
     # Plot bin membership for fields in ra vs dec
     colors = [f'C{i}' for i in range(7)]
@@ -259,23 +242,23 @@ def main():
     plt.ylabel('dec')
     plt.savefig(fig_outdir / 'train_data_fields_dec_vs_ra.png')
 
-    logger.info("Plotting S x A (state x action) space cornerplot (this will take some time...)")
-    # Plot State x action space via cornerplot
-    corner_plot = sns.pairplot(train_dataset._df,
-             vars=train_dataset.pointing_feature_names + ['bin'],
-             kind='hist',
-             corner=True
-            )
-    corner_plot.figure.savefig(fig_outdir / 'state_times_action_space_corner_plot.png')
-    logger.info("Corner plot saved")
+    # logger.info("Plotting S x A (state x action) space cornerplot (this will take some time...)")
+    # # Plot State x action space via cornerplot
+    # corner_plot = sns.pairplot(train_dataset._df,
+    #          vars=train_dataset.global_feature_names + ['bin'],
+    #          kind='hist',
+    #          corner=True
+    #         )
+    # corner_plot.figure.savefig(fig_outdir / 'state_times_action_space_corner_plot.png')
+    # logger.info("Corner plot saved")
 
-    fig, axs = plt.subplots(len(train_dataset.pointing_feature_names), figsize=(4, len(train_dataset.pointing_feature_names)*3))
-    next_pointing_states = train_dataset.next_states.T
-    for i, feat_name in enumerate(train_dataset.pointing_feature_names):
-        axs[i].hist(next_pointing_states[i])
+    fig, axs = plt.subplots(len(train_dataset.global_feature_names), figsize=(4, len(train_dataset.global_feature_names)*3))
+    next_states = train_dataset.next_states.T
+    for i, feat_name in enumerate(train_dataset.global_feature_names):
+        axs[i].hist(next_states[i])
         axs[i].set_title(f"Train distribution ({feat_name})")
     fig.tight_layout()
-    fig.savefig(fig_outdir / 'train_data_pointing_feature_distributions.png')
+    fig.savefig(fig_outdir / 'train_data_global_feature_distributions.png')
         
     if cfg['train']['use_train_as_val']:
         trainloader = train_dataset.get_dataloader(batch_size, num_workers=cfg['train']['num_workers'], pin_memory=True if device.type == 'cuda' else False, random_seed=cfg.get('experiment.metadata.seed'), return_train_and_val=False)
@@ -287,15 +270,15 @@ def main():
     logger.info("Initializing agent...")
 
     steps_per_epoch = np.max([int(len(trainloader.dataset) // batch_size), 1])
-    num_lr_scheduler_steps = np.max([1, int(lr_scheduler_num_epochs * steps_per_epoch)])
+    num_lr_scheduler_steps = np.int32(np.max([1, int(lr_scheduler_num_epochs * steps_per_epoch)]))
     lr_scheduler_kwargs = {'T_max': num_lr_scheduler_steps, 'eta_min': cfg['train']['eta_min']} if lr_scheduler == 'cosine_annealing' else {}
 
-    algorithm = setup_algorithm(algorithm_name=cfg['model']['algorithm'], 
-                                obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg['model']['loss_function'],
+    algorithm = setup_algorithm(algorithm_name=cfg['model']['algorithm'], n_global_features=train_dataset.states.shape[-1], n_bin_features=0 if train_dataset.bin_states is None else train_dataset.bin_states.shape[-1],
+                                num_actions=train_dataset.num_actions, loss_fxn=cfg['model']['loss_function'],
                                 hidden_dim=cfg['train']['hidden_dim'], lr=cfg['train']['lr'], lr_scheduler=lr_scheduler, 
                                 device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 
                                 lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg['model']['gamma'], 
-                                tau=cfg['model']['tau'], activation=cfg['model']['activation'])
+                                tau=cfg['model']['tau'], activation=cfg['model']['activation'], grid_network=cfg['model']['grid_network'])
 
     agent = Agent(
         algorithm=algorithm,
@@ -303,14 +286,33 @@ def main():
     )
 
     # Save (or update) config file after updating
-    cfg['data']['obs_dim'] = train_dataset.obs_dim
+    cfg['data']['state_dim'] = train_dataset.state_dim
+    cfg['data']['bin_state_dim'] = 0 if train_dataset._grid_network is None else train_dataset.bin_state_dim
     cfg['data']['num_actions'] = train_dataset.num_actions
     cfg['metadata']['outdir'] = str(PROJECT_ROOT / cfg['metadata']['parent_results_dir'] / cfg['metadata']['exp_name'])
-    cfg['train']['lr_scheduler_kwargs'] = {key: int(val) for key, val in lr_scheduler_kwargs.items()}
+    cfg['train']['lr_scheduler_kwargs'] = {key: float(val) for key, val in lr_scheduler_kwargs.items()}
+    
+    def check_cfg_dtypes(d):
+        """Recursively check if all values in nested dict are 64-bit."""
+        for k, v in d.items():
+            if isinstance(v, dict):
+                if not check_cfg_dtypes(v):
+                    return False
+            # Check for 64-bit integer or float specifically
+            elif isinstance(v, (np.float64, np.int64, np.float32, np.int32)):
+                # Optional: handle standard python types if necessary
+                # For strictness, you may want: isinstance(v, (np.float64, np.int64))
+                # Or check if dtype is 'float64'/'int64' if using numpy arrays
+                logger.debug(f"{k} has np-bit precision with value {v}")
+            else:
+                logger.debug(f"{k} has value {v} with dtype {type(v)}")
+
+    check_cfg_dtypes(cfg)
     save_config(config_dict=cfg, outdir=results_outdir)
     logger.info("Starting training...")
 
     # Train agent
+    # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     start_time = time.time()
     agent.fit(
         num_epochs=max_epochs,
@@ -328,12 +330,31 @@ def main():
 
     # Plot predicted action for each state in train dataset
     dataset = trainloader.dataset.dataset
-    val_states, val_actions, _, _, _, _ = dataset[valloader.dataset.indices]
-    train_states, train_actions, _, _, _, _ = dataset[trainloader.dataset.indices]
-    for prefix, (states, actions) in zip(['val_', 'train_'], [ (val_states, val_actions), (train_states, train_actions) ]):
-        with torch.no_grad():
-            q_vals = agent.algorithm.policy_net(states.to(device))
-            eval_actions = torch.argmax(q_vals, dim=1).to('cpu').detach().numpy()
+    val_states, val_actions, _, _, _, _, val_bin_states, _ = dataset[valloader.dataset.indices]
+    train_states, train_actions, _, _, _, _, train_bin_states, _ = dataset[trainloader.dataset.indices]
+
+    do_bin_states = dataset._grid_network is not None
+    for prefix, (states, bin_states, actions) in zip(['val_', 'train_'], [ (val_states, val_bin_states, val_actions), (train_states, train_bin_states, train_actions) ]):
+        eval_actions_list = []
+        # Process in smaller chunks to save VRAM
+        plot_batch_size = 128 
+        for i in range(0, len(states), plot_batch_size):
+            with torch.no_grad():
+                # Only send a slice to the device
+                s_chunk = states[i:i + plot_batch_size].to(device)
+                if do_bin_states:
+                    b_chunk = bin_states[i:i + plot_batch_size].to(device)
+                else:
+                    b_chunk = None
+                
+                with torch.amp.autocast('cuda', dtype=torch.float32):
+                    q_vals = agent.algorithm.policy_net(x_glob=s_chunk, x_bin=b_chunk, y_data=None)
+                
+                chunk_actions = torch.argmax(q_vals, dim=1).cpu()
+                eval_actions_list.append(chunk_actions)
+        
+        # Combine back into a single numpy array for your plotting function
+        eval_actions = torch.cat(eval_actions_list).numpy()
 
         # Sequence of actions from target (original schedule) and policy
         target_sequence = actions.detach().numpy()
@@ -351,6 +372,8 @@ def main():
         axs[1].set_ylabel('Eval sequence - target sequence \n[bin number]')
         axs[1].set_xlabel('observation index')
         fig.savefig(fig_outdir / (prefix + 'eval_and_target_bin_sequences.png'))
+
+        logger.info(f'Results saved in {results_outdir}')
 
 if __name__ == "__main__":
     main()

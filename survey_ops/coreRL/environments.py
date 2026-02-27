@@ -3,16 +3,20 @@ from gymnasium.spaces import Dict, Box, Discrete
 import gymnasium as gym
 import numpy as np
 import pandas as pd
-import torch
+from survey_ops.coreRL.data_processing import get_nautical_twilight
 
+from survey_ops.coreRL.data_processing import normalize_noncyclic_features
 from survey_ops.utils import ephemerides, units
 from survey_ops.utils.interpolate import interpolate_on_sphere
 import random
 from survey_ops.utils.geometry import angular_separation
 from survey_ops.coreRL.survey_logic import get_fields_in_bin
 from survey_ops.coreRL.offline_dataset import setup_feature_names
-from survey_ops.coreRL.survey_logic import do_noncyclic_normalizations
+from survey_ops.coreRL.data_processing import *
 
+from astropy.time import Time
+from datetime import datetime, timezone
+import pickle
 import json
 
 import logging
@@ -67,7 +71,7 @@ class BaseTelescope(gym.Env):
 
         # initialize into a non-state.
         # this allows first field choice to be learned
-        self._init_to_first_state(options=options)
+        self._init_to_first_state()
         obs = self._get_state()
         info = self._get_info()
         return obs, info
@@ -125,137 +129,13 @@ class BaseTelescope(gym.Env):
         if getattr(self, "reward_func", None) is None:
             return 1
         return self._reward_func(last_field, next_field)
-
-class ToyEnv(BaseTelescope):
-    """
-    A concrete Gymnasium environment implementation compatible with TelescopeDatasetv0.
-
-    This environment models a single night of observation scheduling. The agent's
-    goal is to sequentially select fields to observe, constrained by a maximum
-    number of total observations for the night and a maximum number of visits
-    per individual field.
-
-    The observation space is a 1D Box representing the current state (Field ID and time index).
-    The action space is a Discrete space over all possible field IDs.
-    """
-    def __init__(self, dataset):
-        """
-        Initializes the ToyEnv with parameters from the dataset.
-
-        Args
-        ----
-            dataset: An object (assumed to be TelescopeDatasetv0) containing
-                     static environment parameters and observation data.
-        """
-        # instantiate static attributes
-        self.nfields = dataset._nfields
-        self.id2pos = dataset._id2pos
-        self.max_visits = dataset._max_visits
-        self._n_obs_per_night = dataset._n_obs_per_night
-        self.target_field_ids = dataset._schedule_field_ids[0]
-        self.obs_dim = dataset.obs_dim
-        self.reward_func = dataset.reward_func
-        self.normalize_obs = dataset.normalize_obs
-        self.norm = np.ones(shape=self.obs_dim)
-        if self.normalize_obs:
-            self.norm = dataset.norm.flatten()
-        self.observation_space = gym.spaces.Box(
-            low=-1, #np.min(dataset.obs),
-            high=1e5,
-            shape=(self.obs_dim,),
-            dtype=np.float32,
-        )
-        # Define action space        
-        self.action_space = gym.spaces.Discrete(self.nfields)
-        super().__init__()
     
-    # ------------------------------------------------------------ #
-    # -------------Convenience functions-------------------------- #
-    # ------------------------------------------------------------ #
 
-    def _init_to_first_state(self):
-        """
-        Initializes the internal state variables for the start of a new episode.
-
-        The episode starts at the beginning of the observation window (index 0)
-        and with the telescope pointing at the first target field.
-        """
-        self._obs_idx = 0
-        self._field_id = self.target_field_ids[0]
-        self._action_mask = np.ones(self.nfields, dtype=bool)
-        self._visited = [self.target_field_ids[0]]
-        self._update_action_mask(int(self.target_field_ids[0]))
-
-    def _update_action_mask(self, action):
-        """
-        Updates the boolean mask that tracks valid actions (field IDs).
-
-        An action becomes invalid if the target field has already been visited
-        the maximum allowed number of times (`self.max_visits`).
-
-        Args:
-            action (int): The field ID to check and potentially mask.
-        """
-        if self._visited.count(action) == self.max_visits:
-            self._action_mask[action] = False
-
-    def _update_state(self, action):
-        """
-        Updates the internal state variables based on the action taken.
-
-        Args
-        ----
-            action (int): The chosen field ID to observe next.
-        """
-        self._obs_idx += 1
-        self._field_id = action
-        # self._coord = np.array(self.id2pos[action], dtype=np.float32)
-        self._visited.append(action)
-        self._update_action_mask(action)
-
-    def _get_state(self):
-        """Converts the current internal state into the formal observation format.
-
-        The observation is a vector containing the current field ID and the
-        current observation index (time step).
-
-        Returns
-        -------
-            np.ndarray: The observation vector, potentially normalized.
-        """
-        obs = np.array([self._field_id, self._obs_idx], dtype=np.float32)
-        # obs = np.concatenate((np.array([self._field_id]), self._coord.flatten()), dtype=np.float32)
-        return obs
-
-    def _get_info(self):
-        """
-        Compute auxiliary information for debugging and constrained action spaces.
-
-        Returns
-        -------
-            dict: A dictionary containing the current action mask.
-        """
-        return {'action_mask': self._action_mask.copy()}
-    
-    def _get_termination_status(self):
-        """
-        Checks if the episode has reached its termination condition.
-
-        Termination occurs when the total number of observations for the night
-        (based on the dataset) has been met or exceeded.
-
-        Returns
-        -------
-            bool: True if the episode is terminated, False otherwise.
-        """
-        terminated = self._obs_idx + 1 >= self._n_obs_per_night
-        return terminated
-
-class OfflineEnv(BaseTelescope):
+class OfflineDECamTestingEnv(BaseTelescope):
     """
     A concrete Gymnasium environment implementation compatible with OfflineDataset.
     """
-    def __init__(self, glob_cfg, cfg, max_nights=None, exp_time=90., slew_time=30., pointing_pd_nightgroup=None, bin_pd_nightgroup=None):
+    def __init__(self, gcfg, cfg, max_nights=None, exp_time=90., slew_time=30., global_pd_nightgroup=None, bin_pd_nightgroup=None):
         """
         Args
         ----
@@ -268,75 +148,110 @@ class OfflineEnv(BaseTelescope):
         self.exp_time = exp_time
         self.slew_time = slew_time
         self.time_between_obs = exp_time + slew_time
-        self.time_dependent_feature_substrs = glob_cfg['features']['TIME_DEPENDENT_FEATURE_NAMES']
-        self.cyclical_feature_names = glob_cfg['features']['CYCLICAL_FEATURE_NAMES']
-        self.max_norm_feature_names = glob_cfg['features']['MAX_NORM_FEATURE_NAMES']
+        self.time_dependent_feature_substrs = gcfg['features']['TIME_DEPENDENT_FEATURE_NAMES']
+        self.cyclical_feature_names = gcfg['features']['CYCLICAL_FEATURE_NAMES']
+        self.max_norm_feature_names = gcfg['features']['MAX_NORM_FEATURE_NAMES']
+        self.ang_distance_feature_names = gcfg['features']['ANG_DISTANCE_NORM_FEATURE_NAMES']
         self.do_cyclical_norm = cfg['data']['do_cyclical_norm']
-        self.do_max_norm = cfg['data']['do_cyclical_norm']
-        self.do_inverse_norm = cfg['data']['do_cyclical_norm']
-        self.include_bin_features = cfg['data']['include_bin_features']
+        self.do_max_norm = cfg['data']['do_max_norm']
+        self.do_inverse_norm = cfg['data']['do_inverse_norm']
+        self.do_ang_distance_norm = cfg['data']['do_ang_distance_norm']
+        self.include_bin_features = len(cfg['data']['additional_bin_features']) > 0
         self.bin_space = cfg['data']['bin_space']
         nside = cfg['data']['nside']
         self.hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
-        self.nbins = len(self.hpGrid.lon)
+        self.nbins = len(self.hpGrid.idx_lookup)
+        self._grid_network = cfg['model']['grid_network']
+        if any(f in cfg['data']['additional_bin_features'] for f in ['night_num_visits', 'night_num_unvisited_fields', 'night_num_incomplete_fields']):
+            self._has_historical_features = True
+        else:
+            self._has_historical_features = False
 
         # Dataset-wide mappings        
-        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2NAME'], 'r') as f:
-            self.field2name = json.load(f)
-        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2RADEC'], 'r') as f:
+        # with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2NAME'], 'r') as f:
+        #     field2name = json.load(f)
+        #     self.field2name
+        with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2RADEC'], 'r') as f:
             field2radec = json.load(f)
-        with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + glob_cfg['files']['FIELD2NVISITS'], 'r') as f:
-            field2nvisits = json.load(f)
+            self.field2radec = {int(k): v for k, v in field2radec.items()}
+        with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2NVISITS'], 'r') as f:
+            field2maxvisits = json.load(f)
+            self.field2maxvisits = {int(fid): int(count) for fid, count in field2maxvisits.items()}
+        
+        # Field to index mapping for sparse field ids; unused fields maps to -1
+        self.nfields = len(self.field2maxvisits)
+        self._fids = np.array(list(self.field2maxvisits.keys()))
+        self._ra_arr = np.zeros(self.nfields)
+        self._dec_arr = np.zeros(self.nfields)
+        self._max_visits_arr = np.zeros(self.nfields, dtype=np.int32)
+        for idx, fid in enumerate(self._fids):
+            self._ra_arr[idx], self._dec_arr[idx] = self.field2radec[fid]
+            self._max_visits_arr[idx] = self.field2maxvisits[fid]
 
-        self.field2radec = {int(k): v for k, v in field2radec.items()}
-        self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
-        self.field_radecs = np.array(list(self.field2radec.values()))
-        self.total_num_obs = sum(field2nvisits.values())
-
+        max_fid = self._fids[-1]
+        fid2idx = np.full(max_fid + 1, -1, dtype=np.int32)
+        for idx, fid in enumerate(self._fids):
+            fid2idx[fid] = idx
+ 
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['DELVE_NIGHT2FIELDVISITS'], 'rb') as f:
+            self.night2visithistory = pickle.load(f)
 
         # Bin-space dependent function to get fields in bin
         if not self.hpGrid.is_azel:
-            with open(glob_cfg['paths']['LOOKUP_DIR'] + '/' + f'nside{nside}_bin2fields_in_bin.json', 'r') as f:
+            with open(gcfg['paths']['LOOKUP_DIR'] + '/' + f'nside{nside}_bin2fields_in_bin.json', 'r') as f:
                 self.bin2fields_in_bin = json.load(f)
+                self.bin2fields_in_bin = {int(k): v for k, v in self.bin2fields_in_bin.items()}
         else:
             self.bin2fields_in_bin = None
 
+        self.base_global_feature_names, self.base_bin_feature_names, self.base_feature_names, self.global_feature_names, \
+            self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
+            = setup_feature_names(include_default_features=True,
+                                  additional_global_features=cfg['data']['additional_global_features'],
+                                  additional_bin_features=cfg['data']['additional_bin_features'],
+                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], 
+                                  cyclical_feature_names=self.cyclical_feature_names,
+                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
+                                  grid_network=self._grid_network
+                                  )
 
-        self.field2nvisits = {int(fid): int(count) for fid, count in field2nvisits.items()}
-        self.nfields = len(self.field2nvisits)
-
-        self.base_pointing_feature_names, self.base_bin_feature_names, self.base_feature_names, self.pointing_feature_names, self.bin_feature_names, self.state_feature_names \
-                    = setup_feature_names(include_default_features=True, include_bin_features=cfg['data']['include_bin_features'],
-                                  additional_bin_features=cfg['data']['additional_bin_features'], additional_pointing_features=cfg['data']['additional_pointing_features'],
-                                  default_pntg_feature_names=glob_cfg['features']['DEFAULT_LOCAL_FEATURE_NAMES'], default_global_feature_names= glob_cfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'],
-                                  default_bin_feature_names=glob_cfg['features']['DEFAULT_BIN_FEATURE_NAMES'],
-                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm)
-        self.pointing_pd_nightgroup = pointing_pd_nightgroup
-        if self.include_bin_features:
-            self.bin_pd_nightgroup = bin_pd_nightgroup
+        self.global_pd_nightgroup = global_pd_nightgroup
+        self.bin_pd_nightgroup = bin_pd_nightgroup
 
         self.max_nights = max_nights
         if max_nights is None:
-            self.max_nights = self.pointing_pd_nightgroup.ngroups
-        # if hasattr(test_dataset, 'reward_func'):
-        #     self._reward_func = test_dataset.reward_func
-        # else:
-        #     self._reward_func = lambda x_prev, x_cur: angular_separation(pos1=x_prev, pos2=x_cur)
+            self.max_nights = self.global_pd_nightgroup.ngroups
 
-        self.obs_dim = cfg['data']['obs_dim']
-        self.observation_space = gym.spaces.Box(
-            low=-100, #np.min(dataset.obs),
-            high=1e8,
-            shape=(self.obs_dim,),
-            dtype=np.float32,
+
+        self.state_dim = cfg['data']['state_dim']
+        self.bins_state_dim = cfg['data']['bin_state_dim']
+
+        if self.include_bin_features:
+            bins_state_shape = (self.nbins, self.bins_state_dim, )
+        else:
+            bins_state_shape = (0,)
+
+        self.observation_space = gym.spaces.Dict(
+            {
+                "global_state": gym.spaces.Box(-2, 2, shape=(self.state_dim,), dtype=np.float32),
+                "bins_state": gym.spaces.Box(-2, 2, shape=bins_state_shape, dtype=np.float32),
+            }
         )
-        # Define action space        
-        self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.nbins, len(self.field2radec)]), dtype=np.int32)
 
-        self._state = np.zeros(self.obs_dim, dtype=np.float32)
+        # Define action space 
+        self.action_space = gym.spaces.Dict(
+            {
+                "bin": gym.spaces.Discrete(self.nbins),
+                "field_id": gym.spaces.Discrete(len(self.field2radec)),
+                "filter": gym.spaces.Box(0., 1., dtype=np.float32)
+            }
+        )       
+        # self.action_space = gym.spaces.Box(low=np.array([0, 0, 0.]), high=np.array([self.nbins, len(self.field2radec), 1.]), dtype=np.int32)
+
+        self._global_state = np.zeros(self.state_dim, dtype=np.float32)
+        self._bins_state = np.zeros(self.bins_state_dim, dtype=np.float32)
         super().__init__()
     
-
     def reset(self, seed=None, options=None):
         """Start a new episode.
 
@@ -352,9 +267,610 @@ class OfflineEnv(BaseTelescope):
         # IMPORTANT: Must call this first to seed the random number generator
         super().reset(seed=seed)
 
-        # initialize into a non-state.
-        # self._night_idx = -1
-        # self._visited = []
+        self._init_to_first_state()
+        state = self._get_state()
+        info = self._get_info()
+        return state, info
+
+    def step(self, actions: dict):
+        """Execute one timestep within the environment.
+
+        Args
+        ----
+            action (int): The field ID to observe next.
+
+        Returns
+        -------
+            tuple: (next_obs, reward, terminated, truncated, info)
+                - next_obs (np.ndarray): The observation after the action.
+                - reward (float): The reward obtained from the action.
+                - terminated (bool): Whether the episode has ended (e.g., reached observation limit).
+                - truncated (bool): Whether the episode was truncated (always False here).
+                - info (dict): Auxiliary diagnostic information.
+        """
+        assert self.action_space.contains(actions), f"Invalid action {actions}"
+        last_field_id = np.int32(self._field_id)
+
+        # ------------------- Advance state ------------------- #
+        self._update_state(actions)
+        
+        # ------------------- Calculate reward ------------------- #
+
+        reward = 0
+        reward += self._get_rewards(last_field_id, self._field_id)
+
+        # -------------------- Start new night if last transition -----------------------#
+
+        is_new_night = self._timestamp >= np.min([self._sunrise_time, self._night_final_timestamp])
+        self._is_new_night = is_new_night
+        
+        if is_new_night:
+            self._start_new_night()
+        
+        # -------------------- Terminate condition -----------------------#
+        truncated = False
+        terminated = self._get_termination_status()
+
+        # get obs and info
+        next_state = self._get_state()
+        info = self._get_info()
+
+        return next_state, reward, terminated, truncated, info
+
+    # ------------------------------------------------------------ #
+    # -------------Convenience functions-------------------------- #
+    # ------------------------------------------------------------ #
+
+    def _init_to_first_state(self):
+        """
+        Initializes the internal state variables for the start of a new episode.
+        """
+        self._action_mask = np.ones(self.nbins, dtype=bool)
+        self._night_idx = -1
+        self._is_new_night = True
+        self._start_new_night()
+        self._update_action_mask(time=self._timestamp)
+    
+    def _start_new_night(self):
+        self._night_idx += 1
+        if self._night_idx >= self.max_nights:
+            return
+
+        # global features
+        global_first_row = self.global_pd_nightgroup.head(1).iloc[self._night_idx]
+        night = global_first_row['night']
+        self._timestamp = global_first_row['timestamp']
+        self._sunset_time = get_nautical_twilight(self._timestamp+10, 'set') # add 10 seconds just in case timestamp is exactly at twilight
+        self._sunrise_time = get_nautical_twilight(self._timestamp+10, 'rise')
+        self._night_final_timestamp = self.global_pd_nightgroup.tail(1).iloc[self._night_idx]['timestamp']
+        self._night_first_timestamp = global_first_row['timestamp']
+        self._field_id = global_first_row['field_id']
+        if self._field_id != -1:
+            logger.debug('FIRST FIELD IS NOT -1!!!')
+        self._bin_num = global_first_row['bin']
+
+        # Get field visit counts at start of night
+        self._s_visits_cur = self.night2visithistory[night][self._fids].copy().astype(np.int32)
+        self._n_visits_cur = np.zeros(self.nfields, dtype=np.int32)
+        self._global_state = [global_first_row[feat_name] for feat_name in self.global_feature_names]
+
+        if self.include_bin_features:
+            # bin_feature_names = expand_feature_names_for_cyclic_norm(self.base_global_feature_names.copy(), self.cyclical_feature_names)
+            bingroup = self.bin_pd_nightgroup
+            first_row_in_night_bin = bingroup.head(1).iloc[self._night_idx]
+            self._bins_state = np.array([first_row_in_night_bin[feat_name] for feat_name in self.bin_feature_names])
+
+            # I think this is all wrapped up in the bin_df f
+            if self._has_historical_features:
+                global_night_df = self.global_pd_nightgroup.get_group(night)
+                if self.hpGrid.is_azel:
+                    # I think these features are already included in the offline dataset bin_df
+                    pass
+            #         az, el = ephemerides.equatorial_to_topographic(ra=self.field_radecs[:, 0], dec=self.field_radecs[:, 1], time=self._timestamp)
+            #         bins = self.hpGrid.ang2idx(lon=az, lat=el) # Bin membership of each field
+            #         valid_mask = bins != None
+
+            #         # Mask quantities whose associated field is below horizon
+            #         v_bins = bins[valid_mask].astype(np.int32)
+            #         v_survey_counts = self._s_visits_cur[valid_mask].astype(np.int32)
+            #         v_night_counts = self._n_visits_cur[valid_mask].astype(np.int32)
+            #         v_max_v = self._max_visits_arr[valid_mask].astype(np.int32)
+
+            #         # Count total visible fields in each bin
+            #         bin_count = np.bincount(v_bins, minlength=self.nbins)
+            #         active_bins = bin_count > 0
+
+            #         # Num Unvisited fields
+            #         s_unvisited = np.bincount(v_bins, weights=(v_survey_counts == 0), minlength=self.nbins)
+            #         n_unvisited = np.bincount(v_bins, weights=(v_night_counts == 0), minlength=self.nbins)
+                    
+            #         # Num Incomplete fields
+            #         s_incomplete_mask = v_survey_counts < v_max_v
+            #         s_incomplete = np.bincount(v_bins, weights=s_incomplete_mask, minlength=self.nbins)
+            #         n_incomplete_mask = v_night_counts < v_max_v
+            #         n_incomplete = np.bincount(v_bins, weights=n_incomplete_mask, minlength=self.nbins)
+
+            #         # Save 
+            #         self._s_unvisited = np.divide(s_unvisited, bin_count, where=active_bins)
+            #         self._n_unvisited = np.divide(n_unvisited, bin_count, where=active_bins)
+            #         self._s_incomplete = np.divide(s_incomplete, bin_count, where=active_bins)
+            #         self._n_incomplete = np.divide(n_incomplete, bin_count, where=active_bins)
+
+            #         # Min tiling
+            #         unique_bins = np.where(active_bins)[0]
+            #         s_tiling_all = v_survey_counts / v_max_v
+            #         n_tiling_all = v_night_counts / v_max_v
+
+            #         self._s_min_tiling = -.1 * np.ones(self.nbins)
+            #         self._n_min_tiling = -.1 * np.ones(self.nbins)
+            #         for b in unique_bins:
+            #             mask = v_bins == b
+            #             self._s_min_tiling[b] = np.min(s_tiling_all[mask])
+            #             self._n_min_tiling[b] = np.min(n_tiling_all[mask])
+
+                else: #radec action space
+                    unique_field_ids, unique_field_counts = np.unique(global_night_df['field_id'][global_night_df['object'] != 'zenith'].to_numpy().astype(np.int32), return_counts=True)
+                    unique_bin_ids, unique_bin_counts = np.unique(global_night_df['bin'][global_night_df['object'] != 'zenith'], return_counts=True)
+
+                    self._night_field2nvisits = {int(fid): int(c) for fid, c in zip(unique_field_ids, unique_field_counts)}
+                    self._night_bin2nvisits = {int(bid): int(c) for bid, c in zip(unique_bin_ids, unique_bin_counts)}
+
+                    # Build bin2fields map
+                    self._night_field_visits_counter = np.zeros(self.nfields)
+                    # self._night_num_visits_tracking = np.zeros(self.nbins)
+                    self._night_num_unvisited_fields_tracking = np.zeros(self.nbins)
+                    self._night_num_incomplete_fields_tracking = np.zeros(self.nbins)
+                    self._min_tiling_tracking = np.zeros(self.nbins)
+                    
+                    bins_arr = global_night_df['bin'].to_numpy(dtype=np.int32)
+                    fields_arr = global_night_df['field_id'].to_numpy(dtype=np.int32)
+
+                    bin2fields_in_bin = {}
+                    for b, f in zip(bins_arr, fields_arr):
+                        if f != -1:
+                            bin2fields_in_bin.setdefault(int(b), set()).add(int(f))
+                    
+                    for bid, flist in bin2fields_in_bin.items():
+                        self._night_num_unvisited_fields_tracking[bid] = len(flist)
+                        self._night_num_incomplete_fields_tracking[bid] = len(flist)
+
+            if self._grid_network == 'single_bin_scorer':
+                A, B = self.nbins, self.bins_state_dim
+                self._bins_state = np.array(self._bins_state).reshape((A, B))
+        else:
+            self._bins_state = np.array([])
+
+        self._update_action_mask(self._timestamp)
+
+    def _update_state(self, action):
+        """
+        Updates the internal state variables based on the action taken.
+
+        Args
+        ----
+            action (int): The chosen field ID to observe next.
+        """
+        self._timestamp += self.time_between_obs
+        bin_num, field_id, filter_wave = int(action['bin']), int(action['field_id']), float(action['filter'])
+
+        self._bin_num = bin_num
+        self._field_id = field_id
+        self._n_visits_cur[field_id] += 1
+        self._s_visits_cur[field_id] += 1
+
+        self._global_state = self._update_global_features(field_id=self._field_id, filter_wave=filter_wave, timestamp=self._timestamp,
+                                                          sunset_time=self._sunset_time, sunrise_time=self._sunrise_time
+                                                          )
+        self._bins_state = self._update_bin_features(timestamp=self._timestamp) if self.include_bin_features else np.array([])
+
+        self._update_action_mask(self._timestamp)
+
+    def _update_global_features(self, field_id, filter_wave, timestamp, sunset_time, sunrise_time):
+        new_features = {}
+        astro_time = Time(timestamp, format='unix', scale='utc')
+        lst = astro_time.sidereal_time('apparent', longitude="-70:48:23.49")  # Blanco longitude
+        new_features['lst'] = lst.radian / (2 * np.pi)  # Normalize LST to [0, 1]
+        new_features['ra'], new_features['dec'] = self.field2radec[field_id]
+        new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
+        new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
+        
+        cos_zenith = np.cos(90 * units.deg - new_features['el'])
+        new_features['airmass'] = 1.0 / cos_zenith #if cos_zenith > 0 else 99.0
+
+        new_features['sun_ra'], new_features['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=timestamp)
+        new_features['sun_az'], new_features['sun_el'] = ephemerides.equatorial_to_topographic(ra=new_features['sun_ra'], dec=new_features['sun_dec'], time=timestamp)
+        new_features['moon_ra'], new_features['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=timestamp)
+        new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'], time=timestamp)
+
+        if sunrise_time == sunset_time:
+            new_features['time_fraction_since_start'] = 0
+        else:
+            new_features['time_fraction_since_start'] = (timestamp - sunset_time) / (sunrise_time - sunset_time)
+
+        new_features['filter_wave'] = filter_wave
+
+        for feat_name in self.base_global_feature_names:
+            if any(string in feat_name and 'bin' not in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
+                new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
+                new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
+
+        global_state_features = [new_features.get(feat, np.nan) for feat in self.global_feature_names]
+        nan_feats = np.isnan(global_state_features)
+        if any(nan_feats):
+            nan_idxs = np.where(nan_feats == True)[0]
+            for idx in nan_idxs:
+                raise ValueError(f"Calculated nan value for global feature {self.global_feature_names[idx]}")
+
+
+        return global_state_features
+    
+    def _update_bin_features(self, timestamp):
+        
+        features = {}
+        current_ra, current_dec = self.field2radec[self._field_id]
+        if self.hpGrid.is_azel:
+            lons, lats = ephemerides.topographic_to_equatorial(az=self.hpGrid.lon, el=self.hpGrid.lat, time=timestamp)
+            features['az'], features['el'] = self.hpGrid.lon, self.hpGrid.lat
+            features['ra'], features['dec'] = lons, lats
+            current_lon, current_lat = ephemerides.equatorial_to_topographic(ra=current_ra, dec=current_dec, time=timestamp)
+        else:
+            lons, lats = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat, time=timestamp)
+            features['ra'], features['dec'] = self.hpGrid.lon, self.hpGrid.lat
+            features['az'], features['el'] = lons, lats
+            current_lon, current_lat = current_ra, current_dec
+            
+        features['angular_distance_to_pointing'] = self.hpGrid.get_angular_separations(lon=current_lon, lat=current_lat)
+        features['ha'] = self.hpGrid.get_hour_angle(time=timestamp)
+        features['airmass'] = self.hpGrid.get_airmass(timestamp)
+        features['moon_distance'] = self.hpGrid.get_source_angular_separations('moon', time=timestamp)
+        
+        if self._has_historical_features:
+            self._n_visits_cur[self._field_id] += 1
+            self._s_visits_cur[self._field_id] += 1 
+            # self._night_num_visits_tracking[self._bin_num] += 1
+            # features['night_num_visits'] = self._night_num_visits_tracking.copy() 
+
+            if not self.hpGrid.is_azel:
+                nfields_in_bin = len(self.bin2fields_in_bin[self._bin_num])
+                if self._n_visits_cur[self._field_id] == 1:
+                    self._night_num_unvisited_fields_tracking[self._bin_num] -= 1
+                    features['night_num_unvisited_fields'] = self._night_num_unvisited_fields_tracking.copy() / nfields_in_bin
+                
+                if self._night_field_visits_counter[self._field_id] == self.field2maxvisits[self._field_id]:
+                    self._night_num_incomplete_fields_tracking[self._bin_num] -= 1
+                    features['night_num_incomplete_fields'] = self._night_num_incomplete_fields_tracking.copy() / nfields_in_bin
+                
+                for bid in self.bin2fields_in_bin:
+
+                    min_tiling = np.array([self._n_visits_cur[fid] for fid in self.bin2fields_in_bin[bid]]).min()
+                    self._min_tiling_tracking[bid] = min_tiling
+                features['night_min_tiling'] = self._min_tiling_tracking.copy() / self.max_tiling
+            
+            else:
+                # Reset at each timestep since fields' bin memberships change over time
+                az, el = ephemerides.equatorial_to_topographic(ra=self._ra_arr, dec=self._dec_arr, time=self._timestamp)
+                bins = self.hpGrid.ang2idx(lon=az, lat=el) # Bin membership of each field
+                valid_mask = bins != None
+
+                # Mask quantities whose associated field is below horizon
+                v_bins = bins[valid_mask].astype(np.int32)
+                v_survey_counts = self._s_visits_cur[valid_mask].astype(np.int32)
+                v_night_counts = self._n_visits_cur[valid_mask].astype(np.int32)
+                v_max_v = self._max_visits_arr[valid_mask].astype(np.int32)
+
+                # Count total visible fields in each bin
+                bin_count = np.bincount(v_bins, minlength=self.nbins)
+                active_bins = bin_count > 0
+
+                # Num Unvisited fields
+                s_unvisited = np.bincount(v_bins, weights=(v_survey_counts == 0), minlength=self.nbins)
+                n_unvisited = np.bincount(v_bins, weights=(v_night_counts == 0), minlength=self.nbins)
+                
+                # Num Incomplete fields
+                s_incomplete_mask = v_survey_counts < v_max_v
+                s_incomplete = np.bincount(v_bins, weights=s_incomplete_mask, minlength=self.nbins)
+                n_incomplete_mask = v_night_counts < v_max_v
+                n_incomplete = np.bincount(v_bins, weights=n_incomplete_mask, minlength=self.nbins)
+
+                # Save 
+                features['survey_num_unvisited_fields'] = np.divide(s_unvisited, bin_count, where=active_bins)
+                features['night_num_unvisited_fields'] = np.divide(n_unvisited, bin_count, where=active_bins)
+                features['survey_num_incomplete_fields'] = np.divide(s_incomplete, bin_count, where=active_bins)
+                features['night_num_incomplete_fields'] = np.divide(n_incomplete, bin_count, where=active_bins)
+
+                # Min tiling
+                unique_bins = np.where(active_bins)[0]
+                s_tiling_all = v_survey_counts / v_max_v
+                n_tiling_all = v_night_counts / v_max_v
+
+                s_min_tiling = -.1 * np.ones(self.nbins)
+                n_min_tiling = -.1 * np.ones(self.nbins)
+                for b in unique_bins:
+                    mask = v_bins == b
+                    s_min_tiling[b] = np.min(s_tiling_all[mask])
+                    n_min_tiling[b] = np.min(n_tiling_all[mask])
+                features['survey_min_tiling'] = s_min_tiling
+                features['night_min_tiling'] = n_min_tiling
+            # -------------------------------- old ---------------------------------- #
+            # self._min_tiling_tracking = -1. * np.ones(self.nbins)
+            # self._night_num_unvisited_fields_tracking = np.zeros(self.nbins)
+            # self._night_num_incomplete_fields_tracking = np.zeros(self.nbins)
+
+            # # Get bin membership of all fields at this time
+            # fieldradecs = np.array([[ra, dec] for ra, dec in self.field2radec.values()])
+            # _az, _el = ephemerides.equatorial_to_topographic(ra=fieldradecs[:, 0], dec=fieldradecs[:, 1], time=timestamp)
+            # fieldazels = np.array([_az, _el]).T
+            # field_bins = self.hpGrid.ang2idx(lon=fieldazels[:, 0], lat=fieldazels[:, 1])
+            # above_horizon_fields_mask = field_bins != None
+            # field_bins = field_bins[above_horizon_fields_mask]
+            # bins_with_fields = np.unique(field_bins)
+
+            # for bid in bins_with_fields:
+            #     bin_mask = field_bins == bid
+            #     # fids_in_bin = 
+            #     fids = np.where(field_bins == bid)[0]
+            #     num_fields_in_bin = len(fids_in_bin)
+            #     f_visit_counts = np.array(([self._field_visit_counter[fid] for fid in fids_in_bin]))
+
+            #     # Get min tiling in bin
+            #     min_tiling = np.array([self._field_visit_counts[fid] for fid in fids]).min()
+            #     self._min_tiling_tracking[bid] = min_tiling
+
+            #     # Get number of unvisited fields
+            #     n_unvisited = np.sum(self._field_visit_counts[fids] == 0)
+            #     self._night_num_unvisited_fields_tracking[bid] = n_unvisited
+
+            #     # Get number of incomplete fields
+            #     n_incomplete = np.sum(self._field_visit_counts[fids] != np.array([self.field2maxvisits[fid] for fid in fids]))
+            #     self._night_num_incomplete_fields_tracking[bid] = n_incomplete
+
+            # features['min_tiling'] = self._min_tiling_tracking.copy()
+            # features['night_num_unvisited_fields'] = self._night_num_unvisited_fields_tracking.copy()
+            # features['night_num_incomplete_fields'] = self._night_num_incomplete_fields_tracking.copy()
+            # -------------------------------- old ---------------------------------- #
+
+        # Normalize periodic features here and add as df cols
+        if self.do_cyclical_norm:
+            for feat_name in self.base_bin_feature_names:
+                if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
+                    features[f'{feat_name}_cos'] = np.cos(features[feat_name])
+                    features[f'{feat_name}_sin'] = np.sin(features[feat_name])
+
+        for feat_name in expand_feature_names_for_cyclic_norm(self.base_bin_feature_names, cyclical_feature_names=self.cyclical_feature_names):
+            f_row = features.get(feat_name, np.nan)
+        bins_state = np.vstack([features.get(feat_name, np.nan) 
+                                for feat_name in expand_feature_names_for_cyclic_norm(self.base_bin_feature_names, cyclical_feature_names=self.cyclical_feature_names)]) \
+                                .T
+
+        return bins_state
+
+    def _get_state(self):
+        global_state, bins_state = self._global_state, self._bins_state
+        global_state_copy = global_state.copy()
+        bins_state_copy = bins_state.copy()
+        # state_normed = self._do_noncyclic_normalizations(state=state_copy)
+        global_state_normed = normalize_noncyclic_features(
+                            state=np.array(global_state_copy),
+                            state_feature_names=self.state_feature_names,
+                            max_norm_feature_names=self.max_norm_feature_names,
+                            ang_distance_norm_feature_names=self.ang_distance_feature_names,
+                            do_inverse_norm=self.do_inverse_norm,
+                            do_max_norm=self.do_max_norm,
+                            do_ang_distance_norm=self.do_ang_distance_norm,
+                            fix_nans=True
+                        )
+        if self.include_bin_features:
+            bins_state_normed = normalize_noncyclic_features(
+                state=np.array(bins_state_copy),
+                state_feature_names=expand_feature_names_for_cyclic_norm(self.base_bin_feature_names, cyclical_feature_names=self.cyclical_feature_names),
+                max_norm_feature_names=self.max_norm_feature_names,
+                ang_distance_norm_feature_names=self.ang_distance_feature_names,
+                do_inverse_norm=self.do_inverse_norm,
+                do_max_norm=self.do_max_norm,
+                do_ang_distance_norm=self.do_ang_distance_norm,
+                fix_nans=True
+            )
+        else:
+            bins_state_normed = np.array([])
+        self._global_state = global_state_normed.astype(np.float32)
+        self._bins_state = bins_state_normed.astype(np.float32)
+
+        # logger.debug(f"Global state max, min {self._global_state.max()}, {self._global_state.min()}")
+        # logger.debug(f"State above max: {np.where(self._global_state > 2)}")            
+        # logger.debug(f"State below min: {np.where(self._global_state <-2)}")
+        # if self.include_bin_features:
+        #     logger.debug(f"Bins state max, min {self._bins_state.max()}, {self._bins_state.min()}")
+        #     logger.debug(f"State above max: {np.where(self._bins_state > 2)}")            
+        #     logger.debug(f"State below min: {np.where(self._bins_state <-2)}")
+        return {"global_state": self._global_state, "bins_state": self._bins_state}
+
+    def _get_info(self):
+        """
+        Compute auxiliary information for debugging and constrained action spaces.
+
+        Returns
+        -------
+            dict: A dictionary containing the current action mask.
+        """
+        return {'action_mask': self._action_mask.copy(), 
+                'visited': self._n_visits_cur.copy(),
+                'timestamp': self._timestamp,
+                'is_new_night': bool(self._is_new_night),
+                'night_idx': int(self._night_idx),
+                'bin': int(self._bin_num),
+                'field_id': int(self._field_id),
+                'valid_fields_per_bin': self._valid_fields_per_bin 
+        }
+    def _get_termination_status(self):
+        """
+        Checks if the episode has reached its termination condition.
+
+        Termination occurs when the total number of observations for the night
+        (based on the dataset) has been met, or, when all fields have been completely
+        visited.
+
+        Returns
+        -------
+            bool: True if the episode is terminated, False otherwise.
+        """
+        all_nights_completed = self._night_idx >= self.max_nights
+        all_fields_visited = all(np.array([self._s_visits_cur[fid] >= self.field2maxvisits[fid] for fid in self._fids]))
+        terminated = all_nights_completed or all_fields_visited
+        return terminated
+    
+    def _update_fields_in_bin(self, field_ids, mask_invalid_fields):
+        fields_in_bin = field_ids[mask_invalid_fields]
+        self._fields_in_bin = fields_in_bin
+
+    def _get_action_mask(self, timestamp, field2nvisits, field_ids, ras, decs, hpGrid, visited):
+        # Mask fields which are completed 
+        mask_completed_fields = np.array([visited[fid] < field2nvisits[fid] for fid in field_ids], dtype=bool) #TODO can probably track visits without repeating this operation
+        fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=ras, dec=decs, time=timestamp)
+        # Mask fields below horizon
+        mask_fields_below_horizon = fields_el > 0
+        sel_valid_fields = mask_completed_fields & mask_fields_below_horizon
+        self._sel_valid_fields = sel_valid_fields
+        # Get bins which are below horizon, masking completed bins
+        valid_fids = field_ids[sel_valid_fields]
+        if hpGrid.is_azel:
+            valid_field_bins = hpGrid.ang2idx(lon=fields_az[sel_valid_fields], lat=fields_el[sel_valid_fields])
+        else:
+            valid_field_bins = hpGrid.ang2idx(lon=ras[sel_valid_fields], lat=decs[sel_valid_fields])
+        
+        self._valid_fields_per_bin = defaultdict(list)
+        action_mask = np.zeros(shape=self.nbins, dtype=bool)
+        for fid, bin_idx in zip(valid_fids, valid_field_bins):
+            if bin_idx is not None:
+                b = int(bin_idx)
+                action_mask[b] = True
+                self._valid_fields_per_bin[b].append(fid)
+                
+        return action_mask
+
+    def _get_slew_time(self, slew_time=None):
+        if slew_time is not None:
+            return slew_time
+        else:
+            raise NotImplementedError
+
+    def _get_exposure_time(self, exp_time=None):
+        if exp_time is not None:
+            return exp_time
+        else:
+            raise NotImplementedError
+
+    def _update_action_mask(self, time):
+        # action mask is updated via self._visited (whether or not field is complete) and whether or not bin is above horizon
+        self._action_mask = self._get_action_mask(timestamp=time, field2nvisits=self.field2maxvisits, field_ids=self._fids, ras=self._ra_arr, decs=self._dec_arr, 
+                                                  hpGrid=self.hpGrid, visited=self._s_visits_cur)
+
+
+class OfflineDECamEnv(BaseTelescope):
+    """
+    A concrete Gymnasium environment implementation compatible with OfflineDataset.
+    """
+    def __init__(self, fields_list_path, dt, gcfg, cfg, max_nights=None, exp_time=90., slew_time=30., visit_history_path=None):
+        """
+        Args
+        ----
+            dataset: An object (assumed to be OfflineDECamDataset instance) containing
+                     static environment parameters and observation data.
+        """
+        assert cfg is not None, "Either cfg or test_dataset must be passed"
+        
+        # Assign static attributes
+        self.first_night_dt = dt
+        self.exp_time = exp_time
+        self.slew_time = slew_time
+        self.time_between_obs = exp_time + slew_time
+        self.time_dependent_feature_substrs = gcfg['features']['TIME_DEPENDENT_FEATURE_NAMES']
+        self.cyclical_feature_names = gcfg['features']['CYCLICAL_FEATURE_NAMES']
+        self.max_norm_feature_names = gcfg['features']['MAX_NORM_FEATURE_NAMES']
+        self.ang_distance_feature_names = gcfg['features']['ANG_DISTANCE_NORM_FEATURE_NAMES']
+        self.do_cyclical_norm = cfg['data']['do_cyclical_norm']
+        self.do_max_norm = cfg['data']['do_max_norm']
+        self.do_inverse_norm = cfg['data']['do_inverse_norm']
+        self.do_ang_distance_norm = cfg['data']['do_ang_distance_norm']
+        self.include_bin_features = len(cfg['data']['additional_bin_features']) > 0
+        self.bin_space = cfg['data']['bin_space']
+        nside = cfg['data']['nside']
+        self.hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
+        self.nbins = len(self.hpGrid.idx_lookup)
+        self._grid_network = cfg['model']['grid_network']
+        if any(f in cfg['data']['additional_bin_features'] for f in ['night_num_visits', 'night_num_unvisited_fields', 'night_num_incomplete_fields']):
+            self._has_historical_features = True
+        else:
+            self._has_historical_features = False
+
+        with open(fields_list_path, 'r') as f:
+            fields_list = json.load(f)
+
+        fields_df = pd.DataFrame(fields_list)
+        fields_df['field_id'] = pd.factorize(fields_df['object'])[0]
+
+        if visit_history_path is None:
+            self.visit_history = [0 for fid in fields_df['field_id'].values]
+        else:
+            with open(visit_history_path, 'rb') as f:
+                self.visit_history = pickle.load(f)
+
+        self.field2nvisits = {int(fid): seqtot for fid, seqtot in zip(fields_df['field_id'].values, fields_df['seqtot'])}
+        self.field2radec = {int(fid): np.array([ra, dec]) for fid, ra, dec in zip(fields_df['field_id'].values, fields_df['RA'], fields_df['dec'])}
+        self.field_ids = np.array(list(self.field2radec.keys()), dtype=np.int32)
+        self.field_radecs = np.array(list(self.field2radec.values()))
+        self.nfields = len(self.field2nvisits)
+
+        # Bin-space dependent function to get fields in bin
+        if not self.hpGrid.is_azel:
+            lon, lat = fields_df['RA'], fields_df['dec']
+            fields_df['bin'] = self.hpGrid.ang2idx(lon=lon, lat=lat)
+            self.bin2fields_in_bin = {int(bin_id): g['field_id'].values.tolist() for bin_id, g in fields_df.groupby('bin')}
+        else:
+            self.bin2fields_in_bin = None
+
+        self.base_global_feature_names, self.base_bin_feature_names, self.base_feature_names, self.global_feature_names, \
+            self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
+            = setup_feature_names(include_default_features=True,
+                                  additional_global_features=cfg['data']['additional_global_features'],
+                                  additional_bin_features=cfg['data']['additional_bin_features'],
+                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], 
+                                  cyclical_feature_names=self.cyclical_feature_names,
+                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
+                                  grid_network=self._grid_network
+                                  )
+
+        self.max_nights = max_nights if max_nights is not None else 1
+            
+        self.state_dim = cfg['data']['state_dim']
+        self.bins_state_dim = cfg['data']['bin_state_dim']
+
+        self.observation_space = gym.spaces.Dict(
+            {
+                "global_state": gym.spaces.Box(-2, 2, shape=(self.state_dim,), dtype=np.float32),
+                "bins_state": gym.spaces.Box(-2, 2, shape=(self.nbins, self.bins_state_dim,), dtype=np.float32),
+            }
+        )
+        # Define action space        
+        self.action_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([self.nbins, len(self.field2radec)]), dtype=np.int32)
+
+        self._global_state = np.zeros(self.state_dim, dtype=np.float32)
+        self._bins_state = np.zeros(self.bins_state_dim, dtype=np.float32)
+        super().__init__()
+    
+    def reset(self, seed=None, options=None):
+        """Start a new episode.
+
+        Args
+        ----
+            seed: Random seed for reproducible episodes
+            options: Additional configuration (unused in this example)
+
+        Returns
+        -------
+            tuple: (observation, info) for the initial state
+        """
+        # IMPORTANT: Must call this first to seed the random number generator
+        super().reset(seed=seed)
 
         self._init_to_first_state()
         state = self._get_state()
@@ -391,7 +907,7 @@ class OfflineEnv(BaseTelescope):
 
         # -------------------- Start new night if last transition -----------------------#
 
-        is_new_night = self._timestamp >= self._night_final_timestamp
+        is_new_night = self._timestamp >= np.min([self._sunrise_time, self._night_final_timestamp])
         self._is_new_night = is_new_night
         
         if is_new_night:
@@ -411,69 +927,48 @@ class OfflineEnv(BaseTelescope):
     # -------------Convenience functions-------------------------- #
     # ------------------------------------------------------------ #
 
-    def _init_to_first_state(self, init_state=None, options=None):
+    def _init_to_first_state(self):
         """
         Initializes the internal state variables for the start of a new episode.
         """
-        self._action_mask = np.zeros(self.nbins, dtype=bool)
-        valid_bins = np.arange(len(self.hpGrid.idx_lookup))
-        self._action_mask[valid_bins] = True
-
-        if init_state is None:
-            self._visited = []
-            self._bins_visited = []
-            self._night_idx = -1
-            self._is_new_night = True
-            self._start_new_night()
-
-            self._update_action_mask(time=self._timestamp)
-
-        else:
-            self._state = options['init_state']
-            self._timestamp = options['init_timestamp']
-
-            field_id = options['field_id']
-            self._field_id = field_id
-            self._visited = [field_id]
-            raise NotImplementedError
-        
+        self._action_mask = np.ones(self.nbins, dtype=bool)
+        self._visited = np.zeros(np.max(self.field_ids) + 1)
+        self._bins_visited = np.zeros(self.nbins)
+        self._night_idx = -1
+        self._is_new_night = True
+        self._start_new_night()
+        self._update_action_mask(time=self._timestamp)
     
     def _start_new_night(self):
-        self._night_idx +=1
-        if self._night_idx >= self.max_nights:
-            return
+        pass
 
-        # Pointing features
-        first_row_in_night_pointing = self.pointing_pd_nightgroup.head(1).iloc[self._night_idx]
-        self._night_final_timestamp = self.pointing_pd_nightgroup.tail(1).iloc[self._night_idx]['timestamp']
-        self._night_first_timestamp = first_row_in_night_pointing['timestamp']
-        self._field_id = first_row_in_night_pointing['field_id']
-        self._bin_num = first_row_in_night_pointing['bin']
-        self._timestamp = first_row_in_night_pointing['timestamp']
-        self._visited.append(self._field_id)
-        self._bins_visited.append(self._bin_num)
+    def get_zenith_state(year, month, day, hour, minute, sec, t_sunrise, t_sunset):
+        datetime = datetime(year, month, day, hour, minute, sec, tzinfo=timezone.utc)
+        night = datetime(year, month, day, tzinfo=timezone.utc)
+        t0 = datetime.timestamp()
+        blanco = ephemerides.blanco_observer(time=t0)
 
-        # self._field_visit_counter = defaultdict(int)
-        # self._num_visits_tracking = np.zeros_like(self.hpGrid.idx_lookup)
-        # self._num_unvisited_fields_tracking = np.zeros_like(self.hpGrid.idx_lookup)
-        # self._num_incomplete_fields_tracking = np.zeros_like(self.hpGrid.idx_lookup)
-        
-        # unique_field_ids, unique_field_counts = np.unique(group['field_id'][group['object'] != 'zenith'].to_numpy().astype(np.int32), return_counts=True)
-        # unique_bin_ids, unique_bin_counts = np.unique(group['bin'][group['object'] != 'zenith'], return_counts=True)
-        # field2nvisits = {int(fid): int(c) for fid, c in zip(unique_field_ids, unique_field_counts)}
-        # bin2nvisits = {int(bid): int(c) for bid, c in zip(unique_bin_ids, unique_bin_counts)}
-        # total_num_observations = len(group)
+        zenith = {}
+        zenith['ra'], zenith['dec'] = blanco.lat, blanco.lon
+        zenith['az'], zenith['el'] = 0, np.pi/2
+        zenith['airmass'] = 1
+        zenith['ha'] = 0
+        zenith['object'] = 'zenith'
+        zenith['field_id'] = -1
+        zenith['bin'] = -1
+        zenith['datetime'] = datetime
+        zenith['night'] = night
+        zenith['sun_ra'], zenith['sun_dec'] = ephemerides.get_source_ra_dec(source='sun', time=t0)
+        zenith['sun_az'], zenith['sun_el'] = ephemerides.equatorial_to_topographic(ra=zenith['sun_ra'], dec=zenith['sun_dec'], time=t0)
+        zenith['moon_ra'], zenith['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=t0)
+        zenith['moon_az'], zenith['moon_el'] = ephemerides.equatorial_to_topographic(ra=zenith['moon_ra'], dec=zenith['moon_dec'], time=t0)
+        zenith['time_fraction_since_start'] = (t0 - t_sunset) / (t_sunrise - t_sunset)
 
-        self._pointing_state_features = [first_row_in_night_pointing[feat_name] for feat_name in self.pointing_feature_names]
-        if self.include_bin_features:
-            first_row_in_night_bin = self.bin_pd_nightgroup.head(1).iloc[self._night_idx]
-            self._bin_state_features = [first_row_in_night_bin[feat_name] for feat_name in self.bin_feature_names]
-        else:
-            self._bin_state_features = []
-        self._state = self._pointing_state_features + self._bin_state_features
-
-    def _update_pointing_features(self, field_id, timestamp, night_first_timestamp, night_final_timestamp):
+    def _update_global_features(self, field_id, timestamp, sunset_time, sunrise_time):
         new_features = {}
+        astro_time = Time(timestamp, format='unix', scale='utc')
+        lst = astro_time.sidereal_time('apparent', longitude="-70:48:23.49")  # Blanco longitude
+        new_features['lst'] = lst.radian
         new_features['ra'], new_features['dec'] = self.field2radec[field_id]
         new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
         new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
@@ -486,52 +981,59 @@ class OfflineEnv(BaseTelescope):
         new_features['moon_ra'], new_features['moon_dec'] = ephemerides.get_source_ra_dec(source='moon', time=timestamp)
         new_features['moon_az'], new_features['moon_el'] = ephemerides.equatorial_to_topographic(ra=new_features['moon_ra'], dec=new_features['moon_dec'], time=timestamp)
 
-        if night_final_timestamp == night_first_timestamp:
+        if sunrise_time == sunset_time:
             new_features['time_fraction_since_start'] = 0
         else:
-            new_features['time_fraction_since_start'] = (timestamp - night_first_timestamp) / (night_final_timestamp - night_first_timestamp)
+            new_features['time_fraction_since_start'] = (timestamp - sunset_time) / (sunrise_time - sunset_time)
 
         new_features['bins_visited_in_night'] = len(set(self._bins_visited))
 
-        for feat_name in self.base_pointing_feature_names:
+        for feat_name in self.base_global_feature_names:
             if any(string in feat_name and 'bin' not in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
                 new_features.update({f'{feat_name}_cos': np.cos(new_features[feat_name])})
                 new_features.update({f'{feat_name}_sin': np.sin(new_features[feat_name])})
-        pointing_state_features = [new_features.get(feat, np.isnan) for feat in self.pointing_feature_names]
-        return pointing_state_features
+        global_state_features = [new_features.get(feat, np.nan) for feat in self.global_feature_names]
+        return global_state_features
     
     def _update_bin_features(self, timestamp):
+        
+        features = {}
         if self.hpGrid.is_azel:
             lons, lats = ephemerides.topographic_to_equatorial(az=self.hpGrid.lon, el=self.hpGrid.lat, time=timestamp)
-            lon_key = 'ra'
-            lat_key = 'dec'
+            features['az'], features['el'] = self.hpGrid.lon, self.hpGrid.lat
+            features['ra'], features['dec'] = lons, lats
         else:
             lons, lats = ephemerides.equatorial_to_topographic(ra=self.hpGrid.lon, dec=self.hpGrid.lat, time=timestamp)
-            lon_key = 'az'
-            lat_key = 'el'
-        hour_angles = self.hpGrid.get_hour_angle(time=timestamp)
-        airmasses = self.hpGrid.get_airmass(timestamp)
-        moon_dists = self.hpGrid.get_source_angular_separations('moon', time=timestamp)
+            features['ra'], features['dec'] = self.hpGrid.lon, self.hpGrid.lat
+            features['az'], features['el'] = lons, lats
+            
+        features['ha'] = self.hpGrid.get_hour_angle(time=timestamp)
+        features['airmass'] = self.hpGrid.get_airmass(timestamp)
+        features['moon_distance'] = self.hpGrid.get_source_angular_separations('moon', time=timestamp)
+        current_ra, current_dec = self.field2radec[self._field_id]
+        features['angular_distance_to_pointing'] = self.hpGrid.get_angular_separations(lon=current_ra, lat=current_dec)
+        
+        if self._has_historical_features:
+            self._night_field_visits_counter[self._field_id] += 1
+            self._night_num_visits_tracking[self._bin_num] += 1
 
-        features = ['ha', 'airmass', 'ang_dist_to_moon', lon_key, lat_key]
-        arrays = [hour_angles, airmasses, moon_dists, lons, lats]
-
-        new_cols = {
-            f'bin_{i}_{feat}': arr[i]
-            for i in range(len(lons))
-            for feat, arr in zip(features, arrays)
-        }
+            if self._night_field_visits_counter[self._field_id] == 1:
+                self._night_num_unvisited_fields_tracking[self._bin_num] -= 1
+            if self._night_field_visits_counter[self._field_id] == self.field2nvisits[self._field_id]:
+                self._night_num_incomplete_fields_tracking[self._bin_num] -= 1
 
         # Normalize periodic features here and add as df cols
         if self.do_cyclical_norm:
             for feat_name in self.base_bin_feature_names:
                 if any(string in feat_name and 'frac' not in feat_name for string in self.cyclical_feature_names):
-                    new_cols[f'{feat_name}_cos'] = np.cos(new_cols[feat_name])
-                    new_cols[f'{feat_name}_sin'] = np.sin(new_cols[feat_name])
-        
-        bin_state_features = [new_cols.get(feat_name, None) for feat_name in self.bin_feature_names]
+                    features[f'{feat_name}_cos'] = np.cos(features[feat_name])
+                    features[f'{feat_name}_sin'] = np.sin(features[feat_name])
 
-        return bin_state_features
+        bins_state = np.vstack([features.get(feat_name, np.nan) 
+                                for feat_name in expand_feature_names_for_cyclic_norm(self.base_bin_feature_names, cyclical_feature_names=self.cyclical_feature_names)]) \
+                                .T
+
+        return bins_state
 
     def _update_state(self, action):
         """
@@ -542,49 +1044,52 @@ class OfflineEnv(BaseTelescope):
             action (int): The chosen field ID to observe next.
         """
         self._timestamp += self.time_between_obs
-        action, field_id = int(action[0]), int(action[1])
+        bin_num, field_id, filter = int(action['bin']), int(action['field_id']), np.float32(action['filter'][0])
 
-        self._bin_num = action
+        self._bin_num = bin_num
         self._field_id = field_id
-        self._visited.append(field_id)
-        self._bins_visited.append(self._bin_num)
+        self._visited[field_id] += 1
+        self._bins_visited[self._bin_num] += 1
 
-        self._pointing_state_features = self._update_pointing_features(field_id=self._field_id, timestamp=self._timestamp, night_first_timestamp=self._night_first_timestamp, night_final_timestamp=self._night_final_timestamp)
+        self._global_state = self._update_global_features(field_id=self._field_id, timestamp=self._timestamp,
+                                                          sunset_time=self._sunset_time, sunrise_time=self._sunrise_time
+                                                          )
+        self._bins_state = self._update_bin_features(timestamp=self._timestamp) if self.include_bin_features else []
 
-        if self.include_bin_features:
-            self._bin_state_features = self._update_bin_features(timestamp=self._timestamp)
-        else:
-            self._bin_state_features = []
-
-        self._state = np.array(self._pointing_state_features + self._bin_state_features, dtype=np.float32)
-        # logger.info(f'SELF._STATE: {len(self._pointing_state_features), len(self._bin_state_features), len(self.state_feature_names)}')
         self._update_action_mask(self._timestamp)
 
     def _get_state(self):
-        """Converts the current internal state into the formal observation format.
-
-        The observation is a vector containing the current field ID and the
-        current observation index (time step).
-
-        Returns
-        -------
-            np.ndarray: The observation vector, potentially normalized.
-        """
-
-        self._state = np.array(self._state, dtype=np.float32)
-        state_copy = np.array(self._state, dtype=np.float32).copy()
+        global_state, bins_state = self._global_state, self._bins_state
+        global_state_copy = global_state.copy()
+        bins_state_copy = bins_state.copy()
         # state_normed = self._do_noncyclic_normalizations(state=state_copy)
-        state_normed = do_noncyclic_normalizations(
-                            state=state_copy,
+        global_state_normed = normalize_noncyclic_features(
+                            state=np.array(global_state_copy),
                             state_feature_names=self.state_feature_names,
                             max_norm_feature_names=self.max_norm_feature_names,
+                            ang_distance_norm_feature_names=self.ang_distance_feature_names,
                             do_inverse_norm=self.do_inverse_norm,
                             do_max_norm=self.do_max_norm,
+                            do_ang_distance_norm=self.do_ang_distance_norm,
                             fix_nans=True
                         )
-
-        self._state_normed = state_normed.copy()
-        return state_normed
+        if self.include_bin_features:
+            bins_state_normed = normalize_noncyclic_features(
+                state=np.array(bins_state_copy),
+                state_feature_names=expand_feature_names_for_cyclic_norm(self.base_bin_feature_names, cyclical_feature_names=self.cyclical_feature_names),
+                max_norm_feature_names=self.max_norm_feature_names,
+                ang_distance_norm_feature_names=self.ang_distance_feature_names,
+                do_inverse_norm=self.do_inverse_norm,
+                do_max_norm=self.do_max_norm,
+                do_ang_distance_norm=self.do_ang_distance_norm,
+                fix_nans=True
+            )
+        else:
+            bins_state_normed = np.array([])
+        self._global_state = global_state_normed.astype(np.float32)
+        self._bins_state = bins_state_normed.astype(np.float32)
+        
+        return {"global_state": self._global_state, "bins_state": self._bins_state}
 
     def _get_info(self):
         """
@@ -595,15 +1100,15 @@ class OfflineEnv(BaseTelescope):
             dict: A dictionary containing the current action mask.
         """
         return {'action_mask': self._action_mask.copy(), 
-                'visited': self._visited,
-                'bins_visited': self._bins_visited,
-                'timestamp': int(self._timestamp),
+                'visited': self._visited.copy(),
+                'bins_visited': self._bins_visited.copy(),
+                'timestamp': self._timestamp,
                 'is_new_night': bool(self._is_new_night),
                 'night_idx': int(self._night_idx),
                 'bin': int(self._bin_num),
-                'field_id': int(self._field_id)
-                } # 'night_idx': self._night_idx, 'timestamp': self._timestamp, 'field_id': self._field_id}
-    
+                'field_id': int(self._field_id),
+                'valid_fields_per_bin': self._valid_fields_per_bin 
+        }
     def _get_termination_status(self):
         """
         Checks if the episode has reached its termination condition.
@@ -617,35 +1122,53 @@ class OfflineEnv(BaseTelescope):
             bool: True if the episode is terminated, False otherwise.
         """
         all_nights_completed = self._night_idx >= self.max_nights
-        all_fields_visited = all(np.array([self._visited.count(fid) >= self.field2nvisits[fid] for fid in self.field_ids]))
+        all_fields_visited = all(np.array([self._visited[fid] >= self.field2nvisits[fid] for fid in self.field_ids]))
         terminated = all_nights_completed or all_fields_visited
         return terminated
     
     def _update_fields_in_bin(self, field_ids, mask_invalid_fields):
         fields_in_bin = field_ids[mask_invalid_fields]
-
         self._fields_in_bin = fields_in_bin
 
     def _get_action_mask(self, timestamp, field2nvisits, field_ids, field_radecs, hpGrid, visited):
         # Mask fields which are completed 
-        mask_completed_fields = np.array([visited.count(fid) < field2nvisits[fid] for fid in field_ids], dtype=bool) #TODO can probably track visits without repeating this operation
+        mask_completed_fields = np.array([visited[fid] < field2nvisits[fid] for fid in field_ids], dtype=bool) #TODO can probably track visits without repeating this operation
         fields_az, fields_el = ephemerides.equatorial_to_topographic(ra=field_radecs[:, 0], dec=field_radecs[:, 1], time=timestamp)
         # Mask fields below horizon
         mask_fields_below_horizon = fields_el > 0
         sel_valid_fields = mask_completed_fields & mask_fields_below_horizon
         self._sel_valid_fields = sel_valid_fields
         # Get bins which are below horizon, masking completed bins
+        valid_fids = field_ids[sel_valid_fields]
         if hpGrid.is_azel:
-            field_bins = hpGrid.ang2idx(lon=fields_az[sel_valid_fields], lat=fields_el[sel_valid_fields])
+            valid_field_bins = hpGrid.ang2idx(lon=fields_az[sel_valid_fields], lat=fields_el[sel_valid_fields])
         else:
-            field_bins = hpGrid.ang2idx(lon=field_radecs[sel_valid_fields, 0], lat=field_radecs[sel_valid_fields, 1])
-        field_bins = field_bins[field_bins != None]
-        # Construct action mask
+            valid_field_bins = hpGrid.ang2idx(lon=field_radecs[sel_valid_fields, 0], lat=field_radecs[sel_valid_fields, 1])
+        
+        self._valid_fields_per_bin = defaultdict(list)
         action_mask = np.zeros(shape=self.nbins, dtype=bool)
-        action_mask[field_bins.astype(np.int32)] = True
+        for fid, bin_idx in zip(valid_fids, valid_field_bins):
+            if bin_idx is not None:
+                b = int(bin_idx)
+                action_mask[b] = True
+                self._valid_fields_per_bin[b].append(fid)
+                
         return action_mask
+
+    def _get_slew_time(self, slew_time=None):
+        if slew_time is not None:
+            return slew_time
+        else:
+            raise NotImplementedError
+
+    def _get_exposure_time(self, exp_time=None):
+        if exp_time is not None:
+            return exp_time
+        else:
+            raise NotImplementedError
 
     def _update_action_mask(self, time):
         # action mask is updated via self._visited (whether or not field is complete) and whether or not bin is above horizon
         self._action_mask = self._get_action_mask(timestamp=time, field2nvisits=self.field2nvisits, field_ids=self.field_ids, field_radecs=self.field_radecs, 
                                                   hpGrid=self.hpGrid, visited=self._visited)
+

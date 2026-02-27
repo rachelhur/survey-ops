@@ -1,11 +1,8 @@
-
-import random
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.coreRL.neural_nets import DQN, BinEmbeddingDQN
+from survey_ops.coreRL.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN
 from survey_ops.utils import geometry
 
 import logging
@@ -78,8 +75,8 @@ class DDQN(AlgorithmBase):
         self.tau = tau
         self.device = device
         
-        self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
-        self.target_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.policy_net = MLP(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        self.target_net = MLP(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.use_double = use_double
         self.target_update_freq = target_update_freq
@@ -152,6 +149,12 @@ class DDQN(AlgorithmBase):
         if step_num % self.target_update_freq == 0:
             self._soft_update()
 
+        # total_norm = torch.norm(torch.stack([
+        #     p.grad.norm() for p in self.policy_net.parameters()
+        #     if p.grad is not None
+        # ]))
+
+
         return loss.item(), q_vals.mean().item()
 
     def _soft_update(self):
@@ -221,10 +224,6 @@ class DDQN(AlgorithmBase):
             q_dataset_mean = q_vals.gather(1, actions.unsqueeze(1) if actions.dim() == 1 else actions).squeeze().mean()
             q_policy_mean = q_vals.max(dim=1)[0].mean()
             q_std = q_vals.std()
-            total_norm = torch.norm(torch.stack([
-                p.grad.norm() for p in self.policy_net.parameters()
-                if p.grad is not None
-            ]))
 
             if hpGrid is not None:
                 # Get angular separation
@@ -244,11 +243,12 @@ class DDQN(AlgorithmBase):
             return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), total_norm.item(), ang_sep, unique_bins
             
 class BehaviorCloning(AlgorithmBase):
-    def __init__(self, obs_dim, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
+    def __init__(self, n_global_features, n_bin_features, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
                     lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu', grid_network=None,
-                    n_local_features=None, n_global_features=None, n_bin_features=None, embedding_dim=None
+                    embedding_dim=None
                     ):
         super().__init__()
+        assert grid_network in [None, 'single_bin_scorer', 'bin_embedding']
         
         assert loss_fxn is not None, "loss_fxn needs to be passed"
         self.loss_fxn = loss_fxn
@@ -256,45 +256,48 @@ class BehaviorCloning(AlgorithmBase):
         self.name = 'BehaviorCloning'
         self.device = device
         if grid_network is None:
-            self.policy_net = DQN(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+            obs_dim = n_global_features + n_bin_features
+            self.policy_net = MLP(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
+        elif grid_network == 'bin_embedding':
+            self.policy_net = BinEmbeddingDQN(n_global_features=n_global_features, n_bin_features=n_bin_features, action_dim=num_actions, grid_network=grid_network, hidden_dim=hidden_dim, activation=activation, embedding_dim=embedding_dim).to(device)
+        elif grid_network == 'single_bin_scorer':
+            self.policy_net = SingleScoreMLP(input_dim=n_global_features + n_bin_features, hidden_dim=hidden_dim, activation=activation).to(device)
         else:
-            self.policy_net = BinEmbeddingDQN(n_local_features=n_local_features, n_global_features=n_global_features, n_bin_features=n_bin_features, action_dim=num_actions, grid_network=grid_network, hidden_dim=hidden_dim, activation=activation, embedding_dim=embedding_dim).to(device)
+            raise NotImplementedError(f"grid_network {grid_network} not implemented")
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
         self.lr_scheduler = self._initialize_scheduler(lr_scheduler, lr_scheduler_kwargs, self.optimizer)
         if lr_scheduler is not None:
             logger.debug(f'lr_scheduler is {self.lr_scheduler}')
             self.lr_scheduler_epoch_start = lr_scheduler_epoch_start
             self.lr_scheduler_num_epochs = lr_scheduler_num_epochs
-
+        # --- ADD THIS CHECK ---
+        logger.debug("Policy Network Structure:")
+        logger.debug(self.policy_net)
+        # ----------------------
         self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'unique_bins', 'accuracy']
         
     def train_step(self, batch, epoch_num, step_num=None):
         """
         Train the policy to mimic expert actions from offline data
         """
-        state, expert_actions, rewards, next_state, dones, action_masks = batch
-        
-        # convert to tensors and appropriate dtypes
-        # if not torch.is_tensor(state):
-        #     state = torch.as_tensor(state, dtype=torch.float32)
-        # state = state.to(self.device)
-        # if not torch.is_tensor(expert_actions):
-        #     expert_actions = torch.as_tensor(expert_actions, dtype=torch.long) # needs to be long for .gather()
-        # else:
-        #     expert_actions = expert_actions.long() # needs to be long for .gather()
-        # expert_actions = expert_actions.to(device=self.device)
+        self.optimizer.zero_grad(set_to_none=True)
+
+        state, expert_actions, rewards, next_state, dones, action_masks, bin_states, next_bin_states = batch
          
         # Assume batch is already tensor
-        state = state.to(device=self.device, dtype=torch.float32)
+        state_dtype = torch.float32
+        state = state.to(device=self.device, dtype=state_dtype)
+        bin_states = bin_states.to(device=self.device, dtype=state_dtype)
         expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
          
-        action_logits = self.policy_net(state, expert_actions)
-        
-        loss = self.loss_fxn(action_logits, expert_actions)
-
+        self.policy_net.train()
+        with torch.amp.autocast('cuda', dtype=state_dtype):
+            action_logits = self.policy_net(x_glob=state, x_bin=bin_states, y_data=None)
+            loss = self.loss_fxn(action_logits, expert_actions)
+            
         # Backward pass
-        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
         do_lr_scheduler_step = (self.lr_scheduler is not None
                                 and epoch_num >= self.lr_scheduler_epoch_start
@@ -307,16 +310,23 @@ class BehaviorCloning(AlgorithmBase):
         return loss.item(), None
     
     def val_step(self, batch, hpGrid=None):
-        eval_obs, expert_actions, rewards, next_obs, dones, action_masks = batch
+        state, expert_actions, rewards, next_obs, dones, action_masks, bin_states, next_bin_states = batch
 
         with torch.no_grad():      
-            # convert to tensors
-            eval_obs = torch.as_tensor(eval_obs, device=self.device, dtype=torch.float32)
-            expert_actions = torch.as_tensor(expert_actions, device=self.device, dtype=torch.long)
-            
-            action_logits = self.policy_net(eval_obs)
-            predicted_actions = action_logits.argmax(dim=1)
-            loss = self.loss_fxn(action_logits, expert_actions)
+        # Assume batch is already tensor
+            state_dtype = torch.float32
+            state = state.to(device=self.device, dtype=state_dtype)
+            expert_actions = expert_actions.to(device=self.device, dtype=torch.long)
+            bin_states = bin_states.to(device=self.device, dtype=state_dtype)
+
+            self.policy_net.eval()
+            with torch.amp.autocast('cuda', dtype=state_dtype):
+                action_logits = self.policy_net(x_glob=state, x_bin=bin_states, y_data=expert_actions)
+                action_logits_masked = action_logits.clone()
+                action_logits_masked[~action_masks] = -1e9
+
+                predicted_actions = action_logits_masked.argmax(dim=1)
+                loss = self.loss_fxn(action_logits, expert_actions)
 
             accuracy = (predicted_actions == expert_actions).float().mean()
 
@@ -333,7 +343,7 @@ class BehaviorCloning(AlgorithmBase):
             z_max_other = action_logits.masked_fill(expert_mask, float("-inf")).max(dim=1).values
             margin = (z_expert - z_max_other).mean()
 
-            # Get policy entrop (p(a_i|s)logp(a_i|s))
+            # Get policy entropy (p(a_i|s)logp(a_i|s))
             p = F.softmax(action_logits, dim=-1)
             entropy = -(p * logp).sum(dim=-1)
 
@@ -355,16 +365,18 @@ class BehaviorCloning(AlgorithmBase):
 
         return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, unique_bins, accuracy.item()
     
-    def select_action(self, obs, action_mask, epsilon=None):
+    def select_action(self, x_glob, x_bin, action_mask, epsilon=None):
         with torch.no_grad():
-            if not torch.is_tensor(obs):
-                obs = torch.tensor(obs, dtype=torch.float32)
+            if not torch.is_tensor(x_glob):
+                x_glob = torch.tensor(x_glob, dtype=torch.float32)
+                x_bin = torch.tensor(x_bin, dtype=torch.float32)
                 mask = torch.tensor(action_mask, dtype=torch.bool)
-            obs = obs.to(self.device, dtype=torch.float32).unsqueeze(0)
+            x_glob = x_glob.to(self.device, dtype=torch.float32).unsqueeze(0)
+            x_bin = x_bin.to(self.device, dtype=torch.float32).unsqueeze(0)
             mask = mask.to(self.device, dtype=torch.bool).unsqueeze(0)
-            action_logits = self.policy_net(obs)
+            action_logits = self.policy_net(x_glob=x_glob, x_bin=x_bin, y_data=None)
             # mask invalid actions
-            action_logits[~mask] = float('-inf')
+            action_logits[~mask] = -1e9
             action = torch.argmax(action_logits, dim=1)
 
             return action.cpu().numpy()[0] if action.size(0) == 1 else action.cpu().numpy()

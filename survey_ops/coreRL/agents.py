@@ -101,7 +101,9 @@ class Agent:
         # assert dataset is not None and dataloader is not None
         if trainloader is not None:
             assert batch_size is not None
-        
+        # Check that valloader is not empty
+        if valloader is not None and len(valloader) == 0:
+            raise ValueError("Validation dataloader is empty! Check dataset split logic.")
         train_metrics = {
             'train_loss': [],
             'train_qvals': [],
@@ -130,6 +132,7 @@ class Agent:
             dataset_size = np.prod(dataset.obs.shape[1:])
             total_steps = int(num_epochs * dataset_size / batch_size)
             loader_iter = None  # not used for manual sampling
+            raise DeprecationWarning("Passing `dataset` and `batch_size` directly to `fit` is deprecated. Please use a DataLoader instead.")
 
         best_val_loss = 1e5
         best_epoch = 0
@@ -161,7 +164,8 @@ class Agent:
                 pbar.update(1)
 
                 pbar.set_description(f"Epoch {i_epoch}/{int(num_epochs)} (step {i_step}/{total_steps})")
-                loss, q_val = self.algorithm.train_step(batch, epoch_num=i_epoch, step_num=i_step)
+                with torch.amp.autocast('cuda'):
+                    loss, q_val = self.algorithm.train_step(batch, epoch_num=i_epoch, step_num=i_step)
                 if i_step % train_log_freq == 0:
                     train_metrics['train_loss'].append(loss)
                     train_metrics['train_qvals'].append(q_val)
@@ -172,25 +176,33 @@ class Agent:
                 # At end of each epoch, do validation check
                 with torch.no_grad():
                     if i_step % steps_per_epoch == 0:
+                        
                         if trainloader is not None:
                             # --- evaluation from dataloader ---
-                            try:
-                                eval_batch = next(eval_iter)
-                            except (NameError, StopIteration):
-                                eval_iter = iter(valloader)
-                                eval_batch = next(eval_iter)
+                            val_metric_sums = [0.0] * len(val_metrics)
+                            num_val_batches = len(valloader)
+
+                            for eval_batch in valloader:
+                                batch_metrics = self.algorithm.val_step(eval_batch, hpGrid)
+                                for idx, val in enumerate(batch_metrics):
+                                    val_metric_sums[idx] += val
+                                    
+                            # Average the metrics across all validation batches
+                            val_metric_vals = [total / num_val_batches for total in val_metric_sums]
+                            
+                            # Also calculate train metrics on a single batch (or average if preferred)
+                            val_train_metric_vals = self.algorithm.val_step(batch, hpGrid)
                         else:
                             # --- old method fallback ---
                             eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
-
-                        val_metric_vals = self.algorithm.val_step(eval_batch, hpGrid)
-                        val_train_metric_vals = self.algorithm.val_step(batch, hpGrid)
-
+                        
                         for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
-                            val_metrics[metric_name].append(metric_val)
+                            if metric_name != 'epoch':
+                                val_metrics[metric_name].append(metric_val)
                         val_metrics['epoch'].append(i_epoch)
                         for metric_name, metric_val in zip(val_train_metrics.keys(), val_train_metric_vals):
-                            val_train_metrics[metric_name].append(metric_val)
+                            if metric_name != 'epoch':
+                                val_train_metrics[metric_name].append(metric_val)
                         val_train_metrics['epoch'].append(i_epoch)
 
                         logger.info(
@@ -200,7 +212,7 @@ class Agent:
                                     f"{k} = {v:.3f} | " for k, v in zip(val_metrics.keys(), val_metric_vals)
                                 ) + "\n" + \
                                 " ".join(
-                                    f"{k + ' (train batch)'} = {v:.3f} | " for k, v in zip(val_train_metrics.keys(), val_train_metric_vals)
+                                    f"(train batch) {k} = {v:.3f} | " for k, v in zip(val_train_metrics.keys(), val_train_metric_vals)
                                 )
                         )
 
@@ -244,24 +256,29 @@ class Agent:
         self.algorithm.policy_net.eval()
         episode_rewards = []
         eval_metrics = {}
-
-        field2nvisits, field2radec, field_ids, field_radecs = env.unwrapped.field2nvisits, env.unwrapped.field2radec, env.unwrapped.field_ids, env.unwrapped.field_radecs
+        ra_arr = env.unwrapped._ra_arr
+        dec_arr = env.unwrapped._dec_arr
+        field2nvisits = env.unwrapped.field2maxvisits
+        field2radec = env.unwrapped.field2radec
+        field2nvisits = env.unwrapped.field2maxvisits
+        field_ids = env.unwrapped._fids
+        
         bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
         hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=cfg['data']['nside'], is_azel=(cfg['data']['bin_space'] == 'azel'))
 
         with logging_redirect_tqdm():
             for episode in tqdm(range(num_episodes)):
-                obs, info = env.reset()
+                state, info = env.reset()
                 episode_reward = 0
                 terminated = False
                 truncated = False
                 num_nights = env.unwrapped.max_nights
-                observations = {f'night-{i}': [] for i in range(num_nights)}
+                glob_observations = {f'night-{i}': [] for i in range(num_nights)}
+                bin_observations = {f'night-{i}': [] for i in range(num_nights)}
                 rewards = {f'night-{i}': [] for i in range(num_nights)}
                 timestamps = {f'night-{i}': [] for i in range(num_nights)}
                 fields = {f'night-{i}': [] for i in range(num_nights)}
                 bins = {f'night-{i}': [] for i in range(num_nights)}
-                                
                 i = 0
                 reward = 0
                 night_idx = 0
@@ -270,19 +287,31 @@ class Agent:
                 while not (terminated or truncated):
                     with torch.no_grad():
                         timestamp = info.get('timestamp')
-                        observations[f'night-{night_idx}'].append(obs)
+                        glob_observations[f'night-{night_idx}'].append(state['global_state'])
+                        bin_observations[f'night-{night_idx}'].append(state['bins_state'])
                         rewards[f'night-{night_idx}'].append(reward)
                         timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
                         fields[f'night-{night_idx}'].append(info.get('field_id'))
                         bins[f'night-{night_idx}'].append(info.get('bin'))
 
                         action_mask = info.get('action_mask', None)
-                        action = self.act(obs, action_mask, epsilon=None)
-                        fields_in_bin = get_fields_in_bin(bin_num=action, is_azel=hpGrid.is_azel, timestamp=timestamp, field2nvisits=field2nvisits, field_ids=field_ids, field_radecs=field_radecs, hpGrid=hpGrid, visited=info.get('visited'), bin2fields_in_bin=bin2fields_in_bin)
-                        field_id = self.choose_field(obs=obs, info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
 
-                        actions = np.array([action, field_id], dtype=np.int32)
-                        obs, reward, terminated, truncated, info = env.step(actions)
+                        # Catch the edge case where no fields are above the horizon
+                        if not action_mask.any():
+                            logger.warning(f"No valid fields available at step {i} (mask is all zeros).")
+                            raise ValueError
+                        
+                        action = self.act(x_glob=state['global_state'], x_bin=state['bins_state'], action_mask=action_mask, epsilon=None)
+
+                        valid_fields_per_bin = info.get('valid_fields_per_bin', {})
+                        fields_in_bin = np.array(valid_fields_per_bin.get(int(action), []))
+
+                        if len(fields_in_bin) == 0:
+                            raise ValueError(f"No valid fields in bin {action}.")
+                        field_id = self.choose_field(obs=(state['global_state'], state['bins_state']), info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
+                        filter_wave = self.choose_filter()
+                        actions = {'bin': np.int32(action), 'field_id': np.int32(field_id), 'filter': np.array([filter_wave], dtype=np.float32)}
+                        state, reward, terminated, truncated, info = env.step(actions)
                         episode_reward += reward
                         night_idx = info.get('night_idx')
                         i += 1
@@ -290,17 +319,19 @@ class Agent:
                         pbar.set_description(f"Rolling out policy for night {night_idx} step {i}")
             pbar.close()
             for night_idx in range(num_nights):
-                observations[f'night-{night_idx}'] = np.array(observations[f'night-{night_idx}'])
+                glob_observations[f'night-{night_idx}'] = np.array(glob_observations[f'night-{night_idx}'])
+                bin_observations[f'night-{night_idx}'] = np.array(bin_observations[f'night-{night_idx}'])
                 rewards[f'night-{night_idx}'] = np.array(rewards[f'night-{night_idx}'])
                 timestamps[f'night-{night_idx}'] = np.array(timestamps[f'night-{night_idx}'])
                 fields[f'night-{night_idx}'] = np.array(fields[f'night-{night_idx}'])
                 bins[f'night-{night_idx}'] = np.array(bins[f'night-{night_idx}'])
             eval_metrics.update({f'ep-{episode}': {
-                'observations': observations,
+                'glob_observations': glob_observations,
+                'bin_observations': bin_observations,
                 'rewards': rewards,
                 'timestamp': timestamps,
                 'field_id': fields,
-                'bin': bins
+                'bin': bins,
             }})
 
             episode_rewards.append(episode_reward)
@@ -318,12 +349,14 @@ class Agent:
             pickle.dump(eval_metrics, handle)
             logger.info(f'eval_metrics.pkl saved in {eval_outdir}')
 
-    def act(self, obs, action_mask, epsilon):
+    def act(self, x_glob, x_bin, action_mask, epsilon):
         """Selects an action using the underlying algorithm.
 
         Args:
-            obs (array-like):
-                Current observation (normalized if applicable).
+            x_glob (array-like):
+                Pointing and global state features (normalized if applicable).
+            x_bin (array-like):
+                Per-bin features (normalized if applicable).
             action_mask (array-like | None):
                 Boolean mask indicating which actions are legal.
             epsilon (float | None):
@@ -332,7 +365,7 @@ class Agent:
         Returns:
             int: Selected action index.
         """
-        return self.algorithm.select_action(obs, action_mask, epsilon)
+        return self.algorithm.select_action(x_glob=x_glob, x_bin=x_bin, action_mask=action_mask, epsilon=epsilon)
     
     def save(self, filepath):
         """Saves algorithm parameters to a file.
@@ -355,23 +388,31 @@ class Agent:
         Choose field in bin based on interpolated Q-values
         """
         assert len(fields_in_bin) != 0, "The agent is receiving an empty list for `fields_in_bin`. "
+        glob_state, bins_state = obs
         visited = info.get('visited', None)
         action_mask = info.get('action_mask', None)
-        field_ids_in_bin = [fid for fid in fields_in_bin if visited.count(fid) < field2nvisits[fid]]
+        field_ids_in_bin = [fid for fid in fields_in_bin if visited[fid] < field2nvisits[fid]]
 
         if field_choice_method == 'interp':
             with torch.no_grad():
-                obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+                glob_state = torch.as_tensor(glob_state, device=self.device, dtype=torch.float32)
+                bins_state = torch.as_tensor(bins_state, device=self.device, dtype=torch.float32)
                 mask = torch.as_tensor(action_mask, device=self.device, dtype=torch.bool)
-                q_vals = self.algorithm.policy_net(obs).squeeze(0)
-                q_vals = q_vals.cpu().detach().numpy()
+                q_vals = self.algorithm.policy_net(glob_state, bins_state).squeeze(0)
+                q_vals = q_vals.cpu().detach().numpy() #TODO - use mask
 
             lon_data = hpGrid.lon
             lat_data = hpGrid.lat
 
             target_lonlats = np.array([field2radec[fid] for fid in field_ids_in_bin])
-            
-            q_interpolated = interpolate_on_sphere(target_lonlats[:, 0], target_lonlats[:, 1], lon_data, lat_data, q_vals)
+            if hpGrid.is_azel:
+                timestamp = info.get('timestamp')
+                target_lons, target_lats = ephemerides.equatorial_to_topographic(ra=target_lonlats[:, 0], dec=target_lonlats[:, 1], time=timestamp)
+            else:
+                target_lons = target_lonlats[:, 0]
+                target_lats = target_lonlats[:, 1]
+
+            q_interpolated = interpolate_on_sphere(target_lons, target_lats, lon_data, lat_data, q_vals)
             best_idx = np.argmax(q_interpolated)
             best_field = field_ids_in_bin[best_idx]
 
@@ -379,6 +420,21 @@ class Agent:
         elif field_choice_method == 'random':
             field_id = random.choice(field_ids_in_bin)
             return field_id
+        
+    def choose_filter(self, filter2wave=None):
+        if filter2wave is None:
+            # Filter wavelengths (nm) according to obztak https://github.com/kadrlica/obztak/blob/c28fab23b09bcff1cf46746eae4ec7e40aeb7f7a/obztak/seeing.py#L22
+            filter2wave = {
+                'u': 380,
+                'g': 480,
+                'r': 640,
+                'i': 780,
+                'z': 920,
+                'Y': 990
+            }
+        normalized_waves = np.array(list(filter2wave.values())) / 1000
+        filter_wave = random.choice(normalized_waves)
+        return filter_wave
         
     def _save_SISPI_schedule(self, outdir):
         return

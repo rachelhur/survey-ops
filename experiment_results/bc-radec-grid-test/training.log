@@ -1,8 +1,0 @@
-2026-02-20 15:56:33 - INFO - Saving results in /home/hurra/Projects/survey-ops/experiment_results/bc-radec-grid-test
-2026-02-20 15:56:33 - INFO - Loading raw data...
-2026-02-20 15:56:34 - INFO - Loaded data from json
-2026-02-20 15:56:34 - INFO - Processing raw data into OfflineDataset()...
-2026-02-20 15:56:34 - INFO - Including the following bin features: ['night_num_unvisited_fields', 'airmass', 'angular_distance_to_pointing', 'ha', 'night_num_incomplete_fields', 'moon_distance']
-2026-02-20 15:57:24 - DEBUG - Calculating ha for 54031 timestamps and 3072 bins
-2026-02-20 15:57:24 - DEBUG - Calculating airmass for 54031 timestamps and 3072 bins
-2026-02-20 15:57:24 - DEBUG - Calculating moon distance for 54031 timestamps and 3072 bins
