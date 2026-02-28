@@ -69,6 +69,9 @@ def plot_metrics(results_outdir, dataset):
     fig.tight_layout()
     fig.savefig(results_outdir / 'figures' / 'loss_and_metrics_history.png')    
 
+    if 'filter_accuracy' in val_metrics:
+        fig, ax = plt.subplots()
+
     i = 0
     fig, ax = plt.subplots()
     for key in val_metrics.keys():
@@ -138,8 +141,8 @@ def get_args():
     parser.add_argument('--data.do_max_norm', action='store_true', help='Whether to apply max normalization to the features')
     parser.add_argument('--data.do_inverse_norm', action='store_true', help='Whether to include inverse normalizations to features')
     parser.add_argument('--data.remove_large_time_diffs', action='store_true', help='New method of calculating transitions which removes any transitions with time difference greater than 10 min')
-    parser.add_argument('--data.additional_bin_features', type=str, nargs='*', default=[], help='Other bin feautures to include')
-    parser.add_argument('--data.additional_pointing_features', type=str, nargs='*', default=[], help='Other pointing feautures to include')
+    parser.add_argument('--data.bin_features', type=str, nargs='*', default=[], help='Bin feautures to include')
+    parser.add_argument('--data.pointing_features', type=str, nargs='*', default=[], help='Pointing feautures to include')
 
     # Training hyperparameters
     parser.add_argument('--train.max_epochs', type=float, default=10, help='Maximum number of passes through train dataset')
@@ -197,11 +200,7 @@ def main():
     lr_scheduler_epoch_start = cfg['train']['lr_scheduler_epoch_start'] #cfg.get('experiment.training.lr_scheduler_epoch_start')
     lr_scheduler_num_epochs = cfg['train']['lr_scheduler_num_epochs'] #cfg.get('experiment.training.lr_scheduler_num_epochs')
     bin_space = cfg['data']['bin_space'] #cfg.get('experiment.data.bin_space')
-    if cfg['data']['additional_bin_features'] is not None:
-        cfg['data']['additional_bin_features'] = list(set(cfg['data']['additional_bin_features']))
-    else:
-        cfg['data']['additional_bin_features'] = []
-    for bin_feat in cfg['data']['additional_bin_features']:
+    for bin_feat in cfg['data']['bin_features']:
         assert bin_feat in global_cfg['features']['BIN_FEATURES'], f"{bin_feat} has not yet been implemented. Check global config file for valid inputs."
     # assert errors dne before running rest of code
     if lr_scheduler is not None:

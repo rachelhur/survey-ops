@@ -9,7 +9,7 @@ from survey_ops.algorithms.algorithms import DDQN, BehaviorCloning
 
 def setup_algorithm(algorithm_name=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
                     lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None, activation=None, 
-                    grid_network=None, n_global_features=None, n_bin_features=0, embedding_dim=None):
+                    grid_network=None, n_global_features=None, n_bin_features=0, num_filters=None, embedding_dim=None):
     assert loss_fxn is not None
     # Initialize activation functions
     if type(activation) == str:
@@ -47,7 +47,8 @@ def setup_algorithm(algorithm_name=None, num_actions=None, loss_fxn=None, hidden
         'grid_network': grid_network,
         'n_global_features': n_global_features,
         'n_bin_features': n_bin_features,
-        'embedding_dim': embedding_dim
+        'embedding_dim': embedding_dim,
+        'num_filters': num_filters
     }
         
     if algorithm_name == 'DDQN' or algorithm_name == 'DQN':

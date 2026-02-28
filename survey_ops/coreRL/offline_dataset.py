@@ -54,9 +54,9 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
         binning_method = cfg['data']['bin_method']
         nside = cfg['data']['nside']
         remove_large_time_diffs = cfg['data']['remove_large_time_diffs']
-        logger.info(f'Including the following bin features: {cfg["data"]["additional_bin_features"]}')
-        logger.info(f'Including the following global features: {gcfg["features"]["DEFAULT_GLOBAL_FEATURE_NAMES"]}')
-        include_bin_features = len(cfg['data']['additional_bin_features']) > 0
+        logger.info(f'Including the following bin features: {cfg["data"]["bin_features"]}')
+        logger.info(f'Including the following global features: {cfg["data"]["global_features"]}')
+        include_bin_features = len(cfg['data']['bin_features']) > 0
         num_bins_1d = cfg['data']['num_bins_1d']
 
         # Load lookup tables
@@ -67,7 +67,7 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
         with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2RADEC'], 'r') as f:
             self.field2radec = json.load(f)
             self.field2radec = {int(k): v for k, v in self.field2radec.items()}
-        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2NVISITS'], 'r') as f:
+        with open(gcfg['paths']['LOOKUP_DIR'] + gcfg['files']['FIELD2MAXVISITS_TRAIN'], 'r') as f:
             self.field2maxvisits = json.load(f)
             self.field2maxvisits = {int(k): v for k, v in self.field2maxvisits.items()}
 
@@ -81,15 +81,16 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
             self.num_actions = len(self.hpGrid.lon)
 
         # Save list of all feature names
-        self.base_global_feature_names, self.base_bin_feature_names, self.base_feature_names, self.global_feature_names, \
-            self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
-            = setup_feature_names(include_default_features=True,
-                                  additional_bin_features=cfg['data']['additional_bin_features'],
-                                  additional_global_features=cfg['data']['additional_global_features'],
-                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], cyclical_feature_names=self.cyclical_feature_names,
-                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
-                                  grid_network=self._grid_network
-                                  )
+        self.base_global_feature_names = cfg['data']['global_features'].copy()
+        self.base_bin_feature_names = cfg['data']['bin_features'].copy()
+        self.global_feature_names, self.bin_feature_names, self.prenorm_expanded_bin_feature_names =\
+            setup_feature_names(base_global_feature_names=self.base_global_feature_names,
+                                base_bin_feature_names=self.base_bin_feature_names,
+                                cyclical_feature_names=self.cyclical_feature_names,
+                                nbins=self.num_actions,
+                                do_cyclical_norm=self.do_cyclical_norm,
+                                grid_network=self._grid_network
+                                )
 
         # Process dataframe to add columns for global features
         df = drop_rows_in_DECam_data(
@@ -106,7 +107,6 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
             df=df, 
             field2name=self.field2name, 
             hpGrid=self.hpGrid, 
-            global_feature_names=self.global_feature_names, 
             base_global_feature_names=self.base_global_feature_names,
             cyclical_feature_names=self.cyclical_feature_names, 
             do_cyclical_norm=self.do_cyclical_norm
@@ -116,7 +116,7 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
             datetimes=df['datetime'],
             hpGrid=self.hpGrid, 
             base_bin_feature_names=self.base_bin_feature_names, 
-            prenorm_bin_feature_names=self.prenorm_bin_feature_names, 
+            prenorm_bin_feature_names=self.prenorm_expanded_bin_feature_names, 
             bin_feature_names=self.bin_feature_names, 
             cyclical_feature_names=self.cyclical_feature_names, 
             do_cyclical_norm=self.do_cyclical_norm, 
@@ -165,13 +165,17 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
         
         # Set dimension of observation
         self.state_dim = self.states.shape[-1]
-        if self._grid_network == 'single_bin_scorer':
+        if self._grid_network is None:
+            state_feature_names = self.global_feature_names + self.bin_feature_names
+        elif self._grid_network == 'single_bin_scorer':
             self.bin_state_dim = self.bin_states.shape[-1]
+            state_feature_names = self.global_feature_names
 
         # Normalize states and next_states
+
         self.states = normalize_noncyclic_features(
             state=self.states,
-            state_feature_names=self.state_feature_names,
+            state_feature_names=state_feature_names,
             max_norm_feature_names=self.max_norm_feature_names,
             ang_distance_norm_feature_names=self.ang_distance_feature_names,
             do_inverse_norm=self.do_inverse_norm,
@@ -181,7 +185,7 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
         )
         self.next_states = normalize_noncyclic_features(
             state=self.next_states,
-            state_feature_names=self.state_feature_names,
+            state_feature_names=state_feature_names,
             max_norm_feature_names=self.max_norm_feature_names,
             ang_distance_norm_feature_names=self.ang_distance_feature_names,
             do_inverse_norm=self.do_inverse_norm,
@@ -230,7 +234,7 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
         dones[-1] = True
         # dones = df.groupby('night').apply(lambda x: [False]*(len(x)-1) + [True]).explode().values.astype(bool)
         # dones = df.groupby('night').apply(lambda x: [False]*(len(x)-1) + [True]).explode().values
-        action_masks = self._construct_action_masks(df=df, num_transitions=num_transitions, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
+        action_masks = self._construct_action_masks(df=df, bin_space=bin_space, num_transitions=num_transitions, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
         return states, next_states, bin_features, next_bin_features, actions, rewards, dones, action_masks, num_transitions
 
     def _construct_states(self, df, bin_df, include_bin_features, remove_large_time_diffs, next_state_idxs):
@@ -238,13 +242,15 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
             global_features, next_global_features = self._construct_global_features(df=df, remove_large_time_diffs=True, next_state_idxs=next_state_idxs)
             if include_bin_features:
                 bin_states, next_bin_states = self._construct_bin_features(bin_df=bin_df, remove_large_time_diffs=remove_large_time_diffs, next_state_idxs=next_state_idxs)
-                self.bin_states = bin_states
-                self.next_bin_states = next_bin_states
                 if self._grid_network is None:
+                    self.bin_states = np.array([])
+                    self.next_bin_states = np.array([])
                     states = np.concatenate((global_features, bin_states), axis=1)
                     next_states = np.concatenate((next_global_features, next_bin_states), axis=1)
                     return states, next_states, bin_states, next_bin_states
                 elif self._grid_network == 'single_bin_scorer':
+                    self.bin_states = bin_states
+                    self.next_bin_states = next_bin_states
                     return global_features, next_global_features, bin_states, next_bin_states
                 else:
                     raise NotImplementedError(f"Grid network type {self._grid_network} not implemented for state construction.")
@@ -322,11 +328,17 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
 
         if binning_method == 'healpix':
             if remove_large_time_diffs:
+                next_state_df = df.iloc[next_state_idxs]
                 if self.hpGrid.is_azel:
-                    lonlat = df.iloc[next_state_idxs][['az', 'el']].values
+                    lonlat = next_state_df[['az', 'el']].values
                 else:
-                    lonlat = df.iloc[next_state_idxs][['ra', 'dec']].values
-                indices = self.hpGrid.ang2idx(lon=lonlat[:, 0], lat=lonlat[:, 1])
+                    lonlat = next_state_df[['ra', 'dec']].values
+                bin_indices = self.hpGrid.ang2idx(lon=lonlat[:, 0], lat=lonlat[:, 1])
+                indices = bin_indices
+
+                if 'filter' in bin_space:
+                    filter_indices = next_state_df['filter'].map(FILTER2IDX).fillna(0).values.astype(np.int32)
+                    indices = (bin_indices * NUM_FILTERS) + filter_indices
             else:
                 if self.hpGrid.is_azel:
                     lonlat_no_zen = df.groupby('night').tail(-1)[['az', 'el']].values
@@ -374,7 +386,7 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
                 rewards = np.ones(len(next_state_df), dtype=np.float32)
         return rewards
 
-    def _construct_action_masks(self, df, num_transitions, remove_large_time_diffs, next_state_idxs):
+    def _construct_action_masks(self, df, bin_space, num_transitions, remove_large_time_diffs, next_state_idxs):
         """
         Constructs action masks only with the condition that bins outside of horizon are masked
         """
@@ -393,6 +405,8 @@ class OfflineDELVEDataset(torch.utils.data.Dataset):
             else:
                 els = np.tile(self.hpGrid.lat[:, np.newaxis], reps=len(df['timestamp'].values)).T
                 action_mask = els > 0
+            if 'filter' in bin_space:
+                action_mask = np.repeat(action_mask, NUM_FILTERS, axis=1)
         else:
             action_mask = np.ones((num_transitions, self.num_actions))
         return action_mask

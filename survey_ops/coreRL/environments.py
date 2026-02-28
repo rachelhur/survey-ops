@@ -156,13 +156,13 @@ class OfflineDECamTestingEnv(BaseTelescope):
         self.do_max_norm = cfg['data']['do_max_norm']
         self.do_inverse_norm = cfg['data']['do_inverse_norm']
         self.do_ang_distance_norm = cfg['data']['do_ang_distance_norm']
-        self.include_bin_features = len(cfg['data']['additional_bin_features']) > 0
+        self.include_bin_features = len(cfg['data']['bin_features']) > 0
         self.bin_space = cfg['data']['bin_space']
         nside = cfg['data']['nside']
         self.hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=nside, is_azel=(self.bin_space == 'azel'))
         self.nbins = len(self.hpGrid.idx_lookup)
         self._grid_network = cfg['model']['grid_network']
-        if any(f in cfg['data']['additional_bin_features'] for f in ['night_num_visits', 'night_num_unvisited_fields', 'night_num_incomplete_fields']):
+        if any(f in cfg['data']['bin_features'] for f in ['night_num_visits', 'night_num_unvisited_fields', 'night_num_incomplete_fields']):
             self._has_historical_features = True
         else:
             self._has_historical_features = False
@@ -174,7 +174,7 @@ class OfflineDECamTestingEnv(BaseTelescope):
         with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2RADEC'], 'r') as f:
             field2radec = json.load(f)
             self.field2radec = {int(k): v for k, v in field2radec.items()}
-        with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2NVISITS'], 'r') as f:
+        with open(gcfg['paths']['LOOKUP_DIR'] + '/' + gcfg['files']['FIELD2MAXVISITS_EVAL'], 'r') as f:
             field2maxvisits = json.load(f)
             self.field2maxvisits = {int(fid): int(count) for fid, count in field2maxvisits.items()}
         
@@ -204,17 +204,22 @@ class OfflineDECamTestingEnv(BaseTelescope):
         else:
             self.bin2fields_in_bin = None
 
-        self.base_global_feature_names, self.base_bin_feature_names, self.base_feature_names, self.global_feature_names, \
-            self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
-            = setup_feature_names(include_default_features=True,
-                                  additional_global_features=cfg['data']['additional_global_features'],
-                                  additional_bin_features=cfg['data']['additional_bin_features'],
-                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], 
-                                  cyclical_feature_names=self.cyclical_feature_names,
-                                  hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
-                                  grid_network=self._grid_network
-                                  )
-
+        self.base_global_feature_names = cfg['data']['global_features'].copy()
+        self.base_bin_feature_names = cfg['data']['bin_features'].copy()
+        self.global_feature_names, self.bin_feature_names, self.prenorm_expanded_bin_feature_names =\
+            setup_feature_names(base_global_feature_names=cfg['data']['global_features'],
+                                base_bin_feature_names=cfg['data']['bin_features'],
+                                cyclical_feature_names=self.cyclical_feature_names,
+                                nbins=self.nbins,
+                                do_cyclical_norm=self.do_cyclical_norm,
+                                grid_network=self._grid_network
+                                )
+        
+        if self._grid_network is None:
+            self.state_feature_names = self.global_feature_names + self.bin_feature_names
+        elif self._grid_network == 'single_bin_scorer':
+            self.state_feature_names = self.global_feature_names
+        
         self.global_pd_nightgroup = global_pd_nightgroup
         self.bin_pd_nightgroup = bin_pd_nightgroup
 
@@ -469,7 +474,7 @@ class OfflineDECamTestingEnv(BaseTelescope):
         new_features = {}
         astro_time = Time(timestamp, format='unix', scale='utc')
         lst = astro_time.sidereal_time('apparent', longitude="-70:48:23.49")  # Blanco longitude
-        new_features['lst'] = lst.radian / (2 * np.pi)  # Normalize LST to [0, 1]
+        new_features['lst'] = lst.radian
         new_features['ra'], new_features['dec'] = self.field2radec[field_id]
         new_features['az'], new_features['el'] = ephemerides.equatorial_to_topographic(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
         new_features['ha'] = ephemerides.equatorial_to_hour_angle(ra=new_features['ra'], dec=new_features['dec'], time=timestamp)
@@ -744,7 +749,8 @@ class OfflineDECamTestingEnv(BaseTelescope):
                 b = int(bin_idx)
                 action_mask[b] = True
                 self._valid_fields_per_bin[b].append(fid)
-                
+        if 'filter' in self.bin_space:
+            action_mask = np.repeat(action_mask[:, np.newaxis], NUM_FILTERS, axis=1).flatten()
         return action_mask
 
     def _get_slew_time(self, slew_time=None):
@@ -832,8 +838,8 @@ class OfflineDECamEnv(BaseTelescope):
             self.bin_feature_names, self.state_feature_names, self.prenorm_bin_feature_names \
             = setup_feature_names(include_default_features=True,
                                   additional_global_features=cfg['data']['additional_global_features'],
-                                  additional_bin_features=cfg['data']['additional_bin_features'],
-                                  default_global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], 
+                                  bin_feature_names=cfg['data']['additional_bin_features'],
+                                  global_feature_names=gcfg['features']['DEFAULT_GLOBAL_FEATURE_NAMES'], 
                                   cyclical_feature_names=self.cyclical_feature_names,
                                   hpGrid=self.hpGrid, do_cyclical_norm=self.do_cyclical_norm,
                                   grid_network=self._grid_network

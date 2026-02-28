@@ -12,8 +12,8 @@ import random
 
 
 from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.coreRL.survey_logic import get_fields_in_bin
 from survey_ops.utils import ephemerides
+from survey_ops.coreRL.data_processing import IDX2WAVE
 import logging
 
 # Get the logger associated with this module's name (e.g., 'my_module')
@@ -265,6 +265,7 @@ class Agent:
         
         bin2fields_in_bin = env.unwrapped.bin2fields_in_bin
         hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=cfg['data']['nside'], is_azel=(cfg['data']['bin_space'] == 'azel'))
+        bin_space = cfg['data']['bin_space']
 
         with logging_redirect_tqdm():
             for episode in tqdm(range(num_episodes)):
@@ -302,14 +303,22 @@ class Agent:
                             raise ValueError
                         
                         action = self.act(x_glob=state['global_state'], x_bin=state['bins_state'], action_mask=action_mask, epsilon=None)
+                        if 'filter' in bin_space:
+                            bin_idx = action // self.algorithm.num_filters
+                            filter_idx = action % self.algorithm.num_filters
+                            filter_wave = IDX2WAVE[filter_idx]
+                        else:
+                            bin_idx = action
+                            filter_idx = None
 
                         valid_fields_per_bin = info.get('valid_fields_per_bin', {})
-                        fields_in_bin = np.array(valid_fields_per_bin.get(int(action), []))
+                        fields_in_bin = np.array(valid_fields_per_bin.get(int(bin_idx), []))
 
                         if len(fields_in_bin) == 0:
                             raise ValueError(f"No valid fields in bin {action}.")
+                        
                         field_id = self.choose_field(obs=(state['global_state'], state['bins_state']), info=info, field2nvisits=field2nvisits, field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin)
-                        filter_wave = self.choose_filter()
+                        # filter_wave = self.choose_filter()
                         actions = {'bin': np.int32(action), 'field_id': np.int32(field_id), 'filter': np.array([filter_wave], dtype=np.float32)}
                         state, reward, terminated, truncated, info = env.step(actions)
                         episode_reward += reward

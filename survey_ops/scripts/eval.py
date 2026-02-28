@@ -298,7 +298,7 @@ def main():
 
     # Creat env
     global_pd_nightgroup = test_dataset._df.groupby('night')
-    if len(cfg['data']['additional_bin_features']) > 0:
+    if len(cfg['data']['bin_features']) > 0:
         bin_pd_nightgroup = test_dataset._bin_df.groupby('night')
     else:
         bin_pd_nightgroup = None
@@ -312,7 +312,7 @@ def main():
     # Sequence of actions from target (original schedule) and policy
     target_sequence = test_dataset.actions.detach().numpy()
     eval_sequence = eval_actions
-    time_idx = np.where(np.array(test_dataset.state_feature_names) == 'time_fraction_since_start')[0]
+    time_idx = np.where(np.array(test_dataset.global_feature_names) == 'time_fraction_since_start')[0]
     first_night_indices = np.where(test_dataset.states[:, time_idx] == 0)[0]
 
     fig, axs = plt.subplots(2, figsize=(10,5), sharex=True)

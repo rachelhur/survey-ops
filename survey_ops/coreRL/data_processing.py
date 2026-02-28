@@ -168,7 +168,7 @@ def get_zenith_features(original_df):
 
     return zenith_df
 
-def calculate_and_add_global_features(df, field2name, hpGrid, global_feature_names, 
+def calculate_and_add_global_features(df, field2name, hpGrid, 
                       base_global_feature_names, cyclical_feature_names, do_cyclical_norm):
     """Processes and filters the dataframe to return a new dataframe with added columns for current global state features"""
     # Sort df by timestamp
@@ -230,7 +230,7 @@ def calculate_and_add_global_features(df, field2name, hpGrid, global_feature_nam
         df.loc[df['object'] == 'zenith', "field_id"] = -1 # Need to re-assign zenith field_id bc df['object'].map(...) above will assign zenith the field_id of the field with object name 'zenith', but this field is mis-labelled and not actually the zenith field. #TODO should fix this in field2name
 
     df['filter_wave'] = df['filter'].map(FILTER2WAVE)
-    df['filter_wave'] = df['filter_wave'].fillna(0.) / FILTERWAVENORM. # zenith "filter" set to 0, then normalize
+    df['filter_wave'] = df['filter_wave'].fillna(0.) / FILTERWAVENORM # zenith "filter" set to 0, then normalize
 
     # Add other feature columns for those not present in dataframe
     for feat_name in base_global_feature_names:
@@ -558,6 +558,7 @@ def setup_feature_names(include_default_features, additional_global_features, ad
                         grid_network):
 
     # include_bin_features = len(additional_global_features) > 0
+    # Any experiment will likely have at least these state features
     required_point_features = default_global_feature_names \
                                 if include_default_features else []
     # required_bin_features = default_bin_feature_names \
@@ -595,6 +596,31 @@ def setup_feature_names(include_default_features, additional_global_features, ad
 
     return base_global_feature_names, base_bin_feature_names, base_feature_names, global_feature_names, \
         bin_feature_names, state_feature_names, prenorm_bin_feature_names
+
+def setup_feature_names(base_global_feature_names, base_bin_feature_names, cyclical_feature_names, nbins, do_cyclical_norm, grid_network):
+    """
+    Returns
+    -------
+    global_feature_names (list): feature names after circular normalization. If grid_network is None, returns [global_feature_names] + [bin_feature_names]
+    bin_feature_names (list): feature names after circular normalization but before adding 'bin_{i}_{feat}' prefixes
+    expanded_global_feature_names
+    """
+    if len(base_bin_feature_names) > 0:
+        prenorm_expanded_bin_feature_names = np.array([ [f'bin_{bin_num}_{bin_feat}'
+                                        for bin_feat in base_bin_feature_names]
+                                        for bin_num in range(nbins) ])
+        prenorm_expanded_bin_feature_names = prenorm_expanded_bin_feature_names.flatten().tolist()
+    else:
+        prenorm_expanded_bin_feature_names = []
+
+    # Replace cyclical features with their cyclical transforms/normalizations if on  
+    if do_cyclical_norm:
+        global_feature_names = expand_feature_names_for_cyclic_norm(base_global_feature_names.copy(), cyclical_feature_names)
+        bin_feature_names = expand_feature_names_for_cyclic_norm(prenorm_expanded_bin_feature_names.copy(), cyclical_feature_names)
+    else:
+        global_feature_names = base_global_feature_names
+        bin_feature_names = prenorm_expanded_bin_feature_names
+    return global_feature_names, bin_feature_names, prenorm_expanded_bin_feature_names
 
 def get_inst_teff_rate(df, remove_large_time_diffs, next_state_idxs):
     if remove_large_time_diffs:

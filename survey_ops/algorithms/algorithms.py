@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from survey_ops.coreRL.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN
+from survey_ops.coreRL.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
 from survey_ops.utils import geometry
 
 import logging
@@ -240,10 +240,10 @@ class DDQN(AlgorithmBase):
             else:
                 ang_sep = 0
 
-            return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), total_norm.item(), ang_sep, unique_bins
+            return loss.item(), td_error_mean.item(), q_std.item(), q_policy_mean.item(), q_dataset_mean.item(), mean_accuracy.item(), ang_sep, unique_bins
             
 class BehaviorCloning(AlgorithmBase):
-    def __init__(self, n_global_features, n_bin_features, num_actions, hidden_dim, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
+    def __init__(self, n_global_features, n_bin_features, num_actions, hidden_dim, num_filters=None, loss_fxn=None, activation=None, lr=1e-3, lr_scheduler=None, lr_scheduler_kwargs=None, \
                     lr_scheduler_epoch_start=1, lr_scheduler_num_epochs=5, device='cpu', grid_network=None,
                     embedding_dim=None
                     ):
@@ -255,6 +255,7 @@ class BehaviorCloning(AlgorithmBase):
 
         self.name = 'BehaviorCloning'
         self.device = device
+        self.num_filters = num_filters
         if grid_network is None:
             obs_dim = n_global_features + n_bin_features
             self.policy_net = MLP(observation_dim=obs_dim, action_dim=num_actions, hidden_dim=hidden_dim, activation=activation).to(device)
@@ -262,6 +263,8 @@ class BehaviorCloning(AlgorithmBase):
             self.policy_net = BinEmbeddingDQN(n_global_features=n_global_features, n_bin_features=n_bin_features, action_dim=num_actions, grid_network=grid_network, hidden_dim=hidden_dim, activation=activation, embedding_dim=embedding_dim).to(device)
         elif grid_network == 'single_bin_scorer':
             self.policy_net = SingleScoreMLP(input_dim=n_global_features + n_bin_features, hidden_dim=hidden_dim, activation=activation).to(device)
+        elif grid_network == 'multi_dim_score':
+            self.policy_net = MultiScoreMLP(input_dim=n_global_features + n_bin_features, num_scores=num_filters, hidden_dim=hidden_dim, activation=activation).to(device)
         else:
             raise NotImplementedError(f"grid_network {grid_network} not implemented")
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=lr)
@@ -274,7 +277,7 @@ class BehaviorCloning(AlgorithmBase):
         logger.debug("Policy Network Structure:")
         logger.debug(self.policy_net)
         # ----------------------
-        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'unique_bins', 'accuracy']
+        self.val_metrics = ['val_loss', 'logp_expert_action', 'action_margin', 'entropy', 'ang_sep', 'unique_bins', 'accuracy', 'filter_accuracy']
         
     def train_step(self, batch, epoch_num, step_num=None):
         """
@@ -351,10 +354,24 @@ class BehaviorCloning(AlgorithmBase):
                 # Get angular separation
                 predicted_actions = predicted_actions.cpu()
                 expert_actions = expert_actions.cpu()
-                predicted_coords = np.array((hpGrid.lon[predicted_actions], hpGrid.lat[predicted_actions]))
-                expert_actions_coords = np.array((hpGrid.lon[expert_actions], hpGrid.lat[expert_actions]))
+
+                if self.num_filters is not None:                    
+                    predicted_bins = predicted_actions // self.num_filters
+                    expert_bins = expert_actions // self.num_filters
+                    predicted_filters = predicted_actions % self.num_filters
+                    expert_filters = expert_actions % self.num_filters
+                    filter_accuracy = np.mean(predicted_filters == expert_filters)
+                else:
+                    predicted_bins = predicted_actions
+                    expert_bins = expert_actions
+                    filter_accuracy = 0.
+
+
+                predicted_coords = np.array((hpGrid.lon[predicted_bins], hpGrid.lat[predicted_bins]))
+                expert_actions_coords = np.array((hpGrid.lon[expert_bins], hpGrid.lat[expert_bins]))
                 ang_seps = geometry.angular_separation(predicted_coords, expert_actions_coords)
                 ang_sep = ang_seps.mean()
+
                 # Prediction diversity
                 num_actions = len(hpGrid.lon)
                 unique_preds = len(torch.unique(predicted_actions))
@@ -363,7 +380,7 @@ class BehaviorCloning(AlgorithmBase):
                 ang_sep = 0
 
 
-        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, unique_bins, accuracy.item()
+        return loss.item(), logp_expert_actions.mean().item(), margin.mean().item(), entropy.mean().item(), ang_sep, unique_bins, accuracy.item(), filter_accuracy
     
     def select_action(self, x_glob, x_bin, action_mask, epsilon=None):
         with torch.no_grad():

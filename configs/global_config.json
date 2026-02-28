@@ -23,7 +23,7 @@
     "ANG_DISTANCE_NORM_FEATURE_NAMES": [
       "distance"
     ],
-    "LOCAL_FEATURES": [
+    "GLOBAL_FEATURES": [
       "ra",
       "dec",
       "az",
@@ -57,34 +57,16 @@
       "ra",
       "dec",
       "angular_distance_to_pointing"
-    ],	
-    "DEFAULT_BIN_FEATURE_NAMES": [
-    ],
-    "DEFAULT_GLOBAL_FEATURE_NAMES": [
-        "ra",
-        "dec",
-        "az",
-        "el",
-        "airmass",
-        "ha",
-        "sun_ra",
-        "sun_dec",
-        "sun_az",
-        "sun_el",
-        "moon_ra",
-        "moon_dec",
-        "moon_az",
-        "moon_el",
-        "time_fraction_since_start"
-      ]
-    },
+    ]
+  },
   "files": {
     "DECFITS": "decam-exposures-20251211.fits",
     "DECJSON": "decam-exposures-20251211.json",
     "FIELD2RADEC": "field2radec.json",
     "FIELD2NAME": "field2name.json",
-    "FIELD2NVISITS": "field2nvisits.json",
-    "DELVE_NIGHT2FIELDVISITS": "offlineDELVE_visit_history.pkl"
+    "FIELD2MAXVISITS_TRAIN": "field2maxvisits_train.json",
+    "FIELD2MAXNVISITS_EVAL": "field2maxvisits_eval.json",
+    "DELVE_NIGHT2FIELDVISITS": "DELVE_visit_history.pkl"
   },
   "paths": {
     "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
