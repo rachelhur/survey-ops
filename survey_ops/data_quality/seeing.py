@@ -19,7 +19,14 @@ _BAND_FACTORS = {
 _DECAM_FWHM = 0.5 * units.arcsec
 
 
-def convert_seeing(seeing, to_band, to_el, from_band="i", from_el=90 * units.deg, instrument=_DECAM_FWHM):
+def convert_seeing(
+    seeing,
+    to_band,
+    to_el,
+    from_band="i",
+    from_el=90 * units.deg,
+    instrument=_DECAM_FWHM,
+):
     """
     Convert seeing from one band and elevation to another band and elevation assuming a
     Kolmogorov turbulence model, wherein seeing ~ airmass^(3/5) / wavelength^(1/5). For

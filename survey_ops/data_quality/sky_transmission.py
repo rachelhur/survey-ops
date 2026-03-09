@@ -4,9 +4,10 @@ from survey_ops.data_quality.sky_brightness import _CONFIG_PATH
 from survey_ops.utils import units
 from configparser import ConfigParser
 
+
 def estimate_transmission(el, band, config_path=None):
     """
-    Estimate the atmospheric transmission at a given elevation and band. Assumes the 
+    Estimate the atmospheric transmission at a given elevation and band. Assumes the
     magnitude of atmospheric extinction is linear with airmass X and an extinction
     coefficient k such that transmission eta = 10 ** (-2 / 5 * k * (X - 1)). For more
     info, see https://doi.org/10.2172/1574836 Appendix A.3.
@@ -20,7 +21,7 @@ def estimate_transmission(el, band, config_path=None):
     config_path : str or Path, optional
         Path to the sky brightness configuration file. If not provided, uses the default
         'decam_sky.conf' in this module's directory.
-    
+
     Returns
     -------
     float or np.ndarray of float
@@ -36,7 +37,7 @@ def estimate_transmission(el, band, config_path=None):
         config_path = Path(config_path)
     config = ConfigParser()
     config.read(str(config_path))
-    
+
     # get extinction coefficients as a function of band
     filters = config.get("sky", "filters").split()
     k = [float(x) for x in config.get("sky", "k").split()]
@@ -51,6 +52,7 @@ def estimate_transmission(el, band, config_path=None):
     # compute transmission
     transmission = 10 ** (-2 / 5 * k_vals * (X - 1))
     return np.squeeze(transmission) if scalar_input else transmission
+
 
 def convert_transmission(
     transmission,
