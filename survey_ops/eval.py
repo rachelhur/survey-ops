@@ -15,7 +15,7 @@ import pandas as pd
 import time
 import logging
 
-from survey_ops.plotting import plot_schedule_from_file
+from survey_ops.plotting.plotting import plot_schedule_from_file
 from survey_ops.utils import pytorch_utils
 from survey_ops.src.agents import Agent
 from survey_ops.src.algorithms import DDQN, BehaviorCloning

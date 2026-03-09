@@ -1,2 +1,10 @@
-# survey_ops/__init__.py
-# Marks this folder as a package
+"""Core training/evaluation source modules."""
+
+__all__ = [
+	"agents",
+	"algorithms",
+	"environments",
+	"eval_utils",
+	"neural_nets",
+	"offline_dataset",
+]
