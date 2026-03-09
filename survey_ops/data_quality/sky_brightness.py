@@ -51,5 +51,5 @@ def estimate_sky_brightness(time, ra, dec, band, config_path=None):
         ra_deg=np.asarray(ra) / units.deg,
         decl_deg=np.asarray(dec) / units.deg,
         band=band,
-    )
+    ) * units.mag / units.arcsec**2
     return np.squeeze(brightness) if scalar_input else brightness
