@@ -6,3 +6,11 @@ __pycache__/
 
 # macOS files
 .DS_Store
+
+# notebooks
+*.ipynb
+
+# project root folders
+/models
+/data/.ipynb_checkpoints/
+/experiments
