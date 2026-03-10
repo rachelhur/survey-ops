@@ -8,13 +8,13 @@ import torch
 import time
 import pickle
 
-from survey_ops.coreRL.agents import Agent
+from survey_ops.core_rl.agents import Agent
 from survey_ops.algorithms.factory import setup_algorithm
 from survey_ops.utils import geometry
 from survey_ops.utils import units
 from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
-from survey_ops.coreRL.data_processing import load_raw_data_to_dataframe 
-from survey_ops.coreRL.offline_dataset import OfflineDataset
+from survey_ops.data_processing.data_processing import load_raw_data_to_dataframe 
+from survey_ops.data_processing.offline_dataset import OfflineDataset
 from survey_ops.utils.sys_utils import save_config, load_global_config, dict_to_nested, get_workspace_dir
 
 import argparse

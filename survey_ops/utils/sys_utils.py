@@ -84,12 +84,15 @@ def dict_to_nested(data):
 
 def setup_logger(save_dir, logging_filename, logging_level='debug'):
     # Create logger
-    logger = logging.getLogger(__name__)
-    #logger = logging.getLogger()
+    # logger = logging.getLogger(__name__)
+    logger = logging.getLogger()
     if logging_level == 'debug':
         logger.setLevel(logging.DEBUG)
+        format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     elif logging_level == 'info':
         logger.setLevel(logging.INFO)
+        format = '%(asctime)s - %(levelname)s - %(message)s'
+        
     else:
         raise NotImplementedError
 
@@ -99,16 +102,17 @@ def setup_logger(save_dir, logging_filename, logging_level='debug'):
     
     # Create handlers
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    # console_handler.setLevel(logging.DEBUG)
     file_handler = logging.FileHandler(save_dir / logging_filename, mode='w')
-    file_handler.setLevel(logging.DEBUG)
+    # file_handler.setLevel(logging.DEBUG)
     
     # Create formatters and add to handlers
     # console_format = logging.Formatter('%(levelname)s - %(message)s')
-    format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    format = logging.Formatter(format, datefmt='%Y-%m-%d %H:%M:%S')
     console_handler.setFormatter(format)
     file_handler.setFormatter(format)
     
+    # Add handlers to logger
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
     return logger

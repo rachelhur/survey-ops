@@ -12,16 +12,16 @@ import json
 import pandas as pd
 import logging
 
-from survey_ops.plotting import plot_schedule_from_file
-from survey_ops.coreRL.agents import Agent
+from survey_ops.plotting.plotting import plot_schedule_from_file
+from survey_ops.core_rl.agents import Agent
 from survey_ops.utils.sys_utils import seed_everything, load_global_config, load_model_config, get_workspace_dir
-from survey_ops.algorithms import setup_algorithm
+from survey_ops.algorithms.factory import setup_algorithm
 from survey_ops.utils.sys_utils import setup_logger, get_device
-from survey_ops.coreRL.data_processing import load_raw_data_to_dataframe, get_nautical_twilight
-from survey_ops.coreRL.environments import OfflineDECamTestingEnv
-from survey_ops.coreRL.offline_dataset import OfflineDataset
+from survey_ops.data_processing.data_processing import load_raw_data_to_dataframe, get_nautical_twilight
+from survey_ops.core_rl.environments import OfflineDECamTestingEnv
+from survey_ops.data_processing.offline_dataset import OfflineDataset
 
-from survey_ops.coreRL.data_processing import expand_feature_names_for_cyclic_norm
+from survey_ops.data_processing.data_processing import expand_feature_names_for_cyclic_norm
 import logging
 logger = logging.getLogger(__name__)
 
@@ -228,8 +228,8 @@ def main():
     else:
         evaluation_name = args.evaluation_name
 
-    outdir_base = cfg['metadata']['outdir']
-    assert os.path.exists(outdir_base + 'best_weights.pt'), f"There is no best_weights.pt file in {outdir_base}"
+    outdir_base = Path(cfg['metadata']['outdir'])
+    assert os.path.exists(outdir_base / 'best_weights.pt'), f"There is no best_weights.pt file in {outdir_base}"
     eval_outdir = os.path.join(outdir_base, evaluation_name)
 
     if not os.path.exists(eval_outdir):
@@ -419,7 +419,7 @@ def main():
         eval_zenith_mask = eval_metrics['ep-0']['field_id'][f'night-{night_idx}'] != -1
         data_zenith_mask = night_group['field_id'] != -1
         
-        eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
+        eval_timestamps = np.array(eval_metrics['ep-0']['timestamp'][f'night-{night_idx}'])
         sunset = get_nautical_twilight(night_group['timestamp'].values[0], event_type='set')
         eval_timestamps = (eval_timestamps - sunset) / 3600
         data_timestamps = (night_group['timestamp'].values - sunset) / 3600 

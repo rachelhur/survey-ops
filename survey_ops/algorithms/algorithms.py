@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from survey_ops.coreRL.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
+from survey_ops.core_rl.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
 from survey_ops.utils import geometry
 
 import logging
