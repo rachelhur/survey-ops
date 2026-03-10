@@ -286,17 +286,19 @@ class Agent:
                 bins = {}
                 filters = {}
 
+                episode_data = {}
                 reward = 0
                 night_idx = 0
-
-                # Append first night's zenith state
-                glob_observations[f'night-0'] = [state['global_state']]
-                bin_observations[f'night-0'] = [state['bin_state']]
-                rewards[f'night-0'] = [reward]
-                timestamps[f'night-0'] = [info.get('timestamp')]
-                fields[f'night-0'] = [-1]
-                bins[f'night-0'] = [-1]
-                filters[f'night-0'] = [0.]
+                current_night_key = f'night-{night_idx}'
+                episode_data[current_night_key] = {
+                    'glob_observations': [state['global_state']],
+                    'bin_observations': [state['bin_state']],
+                    'rewards': [rewards],
+                    'timestamp': [info.get('timestamp')],
+                    'field_id': [-1],
+                    'bin': [-1],
+                    'filter': [0.]
+                }
 
                 i = 0
                 last_bin_idx = -1
@@ -332,13 +334,14 @@ class Agent:
                         is_first_wait = (bin_idx == -2) and (last_bin_idx != -2)
                         is_real_obs = bin_idx >= 0
                         if is_first_wait or is_real_obs:
-                            glob_observations[f'night-{night_idx}'].append(state['global_state'])
-                            bin_observations[f'night-{night_idx}'].append(state['bin_state'])
-                            rewards[f'night-{night_idx}'].append(reward)
-                            timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
-                            fields[f'night-{night_idx}'].append(field_id)
-                            bins[f'night-{night_idx}'].append(bin_idx)
-                            filters[f'night-{night_idx}'].append(filter_wave)
+                            current_night_dict = episode_data[current_night_key]
+                            current_night_dict['glob_observations'].append(state['global_state'])
+                            current_night_dict['bin_observations'].append(state['bin_state'])
+                            current_night_dict['rewards'].append(reward)
+                            current_night_dict['timestamp'].append(info.get('timestamp'))
+                            current_night_dict['field_id'].append(field_id)
+                            current_night_dict['bin'].append(bin_idx)
+                            current_night_dict['filter'].append(filter_wave)
                         
                         last_bin_idx = bin_idx
                         # Step environment
@@ -353,37 +356,29 @@ class Agent:
                         # Log zenith state if is new night
                         if info.get('night_idx') != night_idx:
                             night_idx = info.get('night_idx')
-                            glob_observations[f'night-{night_idx}'] = [state['global_state']]
-                            bin_observations[f'night-{night_idx}'] = [state['bin_state']]
-                            rewards[f'night-{night_idx}'] = [reward]
-                            timestamps[f'night-{night_idx}'] = [info.get('timestamp')]
-                            fields[f'night-{night_idx}'] = [field_id]
-                            bins[f'night-{night_idx}'] = [bin_idx]
-                            filters[f'night-{night_idx}'] = [filter_wave]
+                            episode_data[f'night-{night_idx}'] = {
+                                'glob_observations': [state['global_state']],
+                                'bin_observations': [state['bin_state']],
+                                'rewards': [reward],
+                                'timestamp': [info.get('timestamp')],
+                                'field_id': [field_id],
+                                'bin': [bin_idx],
+                                'filter': [filter_wave]
+                            }
 
                         # pbar update
                         i += 1
                         pbar.update(1)
                         pbar.set_description(f"Rolling out policy for night {night_idx} step {i}")
             pbar.close()
-            for n_idx in range(night_idx):
-                glob_observations[f'night-{n_idx}'] = np.array(glob_observations[f'night-{n_idx}'])
-                bin_observations[f'night-{n_idx}'] = np.array(bin_observations[f'night-{n_idx}'])
-                rewards[f'night-{n_idx}'] = np.array(rewards[f'night-{n_idx}'])
-                timestamps[f'night-{n_idx}'] = np.array(timestamps[f'night-{n_idx}'])
-                fields[f'night-{n_idx}'] = np.array(fields[f'night-{n_idx}'])
-                bins[f'night-{n_idx}'] = np.array(bins[f'night-{n_idx}'])
-                filters[f'night-{n_idx}'] = np.array(filters[f'night-{n_idx}'])
-            eval_metrics.update({f'ep-{episode}': {
-                'glob_observations': glob_observations,
-                'bin_observations': bin_observations,
-                'rewards': rewards,
-                'timestamp': timestamps,
-                'field_id': fields,
-                'bin': bins,
-                'filters': filters,
-            }})
-            
+
+            # Convert all lists in the nested dictionary to numpy arrays
+            for night_key, metrics in episode_data.items():
+                for metric_name, values in metrics.items():
+                    episode_data[night_key][metric_name] = np.array(values)
+
+            # Store it in the master evaluation dictionary
+            eval_metrics[f'ep-{episode}'] = episode_data
             episode_rewards.append(episode_reward)
             logger.info(f'terminated at step {i}')
 

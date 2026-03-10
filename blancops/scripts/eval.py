@@ -31,21 +31,21 @@ import re
 
 from pathlib import Path
 
-def save_schedule(eval_metrics, pd_group, save_dir, night_idx, make_gifs=True, nside=None, is_azel=False, whole=False, bin2pos_filepath=None, field2radec_filepath=None):
+def save_schedule(night_metrics, pd_group, save_dir, make_gifs=True, nside=None, is_azel=False, whole=False, bin2pos_filepath=None, field2radec_filepath=None):
     bin2pos_filepath=None
     # Save timestamps, field_ids, and bin numbers
     bin_space = 'azel' if is_azel else 'radec'
     assert os.path.exists(save_dir)
 
-    eval_timestamps = eval_metrics['ep-0']['timestamp'][f'night-{night_idx}']
+    eval_timestamps = night_metrics['timestamp']
     expert_timestamps = pd_group['timestamp'].values
     
     _timestamps = eval_timestamps if len(eval_timestamps) > len(expert_timestamps) else expert_timestamps
     
     schedule_full = {
         'agent_timestamp': eval_timestamps,
-        'agent_field_id': eval_metrics['ep-0']['field_id'][f'night-{night_idx}'],
-        'agent_bin_id': eval_metrics['ep-0']['bin'][f'night-{night_idx}'],
+        'agent_field_id': night_metrics['field_id'],
+        'agent_bin_id': night_metrics['bin'],
         'expert_timestamp': expert_timestamps,
         'expert_field_id': pd_group['field_id'].values,
         'expert_bin_id': pd_group['bin'].values,
@@ -415,11 +415,13 @@ def main():
         if not os.path.exists(subdir_path):
             os.makedirs(subdir_path)
         
+        # Get ep-night metrics dict
+        metrics = eval_metrics['ep-0'][f'night-{night_idx}']
         # Mask zenith observations in plotting
-        eval_zenith_mask = eval_metrics['ep-0']['field_id'][f'night-{night_idx}'] != -1
+        eval_zenith_mask = metrics['field_id'] != -1
         data_zenith_mask = night_group['field_id'] != -1
         
-        eval_timestamps = np.array(eval_metrics['ep-0']['timestamp'][f'night-{night_idx}'])
+        eval_timestamps = np.array(metrics['timestamp'])
         sunset = get_nautical_twilight(night_group['timestamp'].values[0], event_type='set')
         eval_timestamps = (eval_timestamps - sunset) / 3600
         data_timestamps = (night_group['timestamp'].values - sunset) / 3600 
@@ -427,7 +429,7 @@ def main():
         # Plot bins vs timestamp        
         fig_b, axb = plt.subplots()
         axb.plot(eval_timestamps[eval_zenith_mask],
-                      eval_metrics[f'ep-{ep_num}']['bin'][f'night-{night_idx}'][eval_zenith_mask],
+                      metrics['bin'][eval_zenith_mask],
                       marker='o', label='pred', alpha=.5)
         axb.plot(data_timestamps[data_zenith_mask],
                       night_group['bin'].values.astype(int)[data_zenith_mask],
@@ -442,7 +444,7 @@ def main():
 
         # Plot state features vs timestamp for first episode
         fig, axs = plt.subplots(len(test_dataset.global_feature_names), figsize=(10, len(test_dataset.global_feature_names)*5))
-        for i, feature_row in enumerate(eval_metrics['ep-0']['glob_observations'][f'night-{night_idx}'].T[:len(test_dataset.global_feature_names)]):
+        for i, feature_row in enumerate(metrics['glob_observations'].T[:len(test_dataset.global_feature_names)]):
             feat_name = test_dataset.global_feature_names[i]
             eval_data = feature_row.copy()
             if feat_name == 'airmass':
@@ -465,12 +467,12 @@ def main():
 
         # Plot most frequently visited bin features vs timestamp
         if cfg['model']['grid_network'] is not None:
-            _bins_vis_tonight = eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int)
+            _bins_vis_tonight = metrics['bin'].astype(int)
             _bincounts = np.bincount(_bins_vis_tonight[eval_zenith_mask], minlength=test_dataset.num_actions)
             _most_common_bin = np.argmax(_bincounts)
             normed_feature_names = expand_feature_names_for_cyclic_norm(test_dataset.base_bin_feature_names, test_dataset.cyclical_feature_names)
             fig, axs = plt.subplots(len(normed_feature_names), figsize=(10, len(normed_feature_names)* 5))
-            for i, feat_row in enumerate(eval_metrics['ep-0']['bin_observations'][f'night-{night_idx}'].T[:, _most_common_bin, :]):
+            for i, feat_row in enumerate(metrics['bin_observations'].T[:, _most_common_bin, :]):
                 feat_name = normed_feature_names[i]
                 # unnormalize observations to compare to expert values
                 if feat_name == 'airmass':
@@ -493,10 +495,10 @@ def main():
         # Plot static bin and field radec scatter plots
         bin2coord = {int(i): (lon, lat) for i, (lon, lat) in enumerate(zip(test_dataset.hpGrid.lon, test_dataset.hpGrid.lat))}
 
-        eval_bin_radecs = np.array([bin2coord[bin_num] for bin_num in eval_metrics['ep-0']['bin'][f'night-{night_idx}'].astype(int) if bin_num != -1])
+        eval_bin_radecs = np.array([bin2coord[bin_num] for bin_num in metrics['bin'].astype(int) if bin_num != -1])
         orig_bin_radecs = np.array([bin2coord[bin_num] for bin_num in night_group['bin'].values if bin_num != -1])
         
-        eval_field_radecs = np.array([FIELD2RADEC[str(field_id)] for field_id in eval_metrics['ep-0']['field_id'][f'night-{night_idx}'].astype(int) if field_id != -1])
+        eval_field_radecs = np.array([FIELD2RADEC[str(field_id)] for field_id in metrics['field_id'].astype(int) if field_id != -1])
         orig_field_radecs = np.array([FIELD2RADEC[str(field_id)] for field_id in night_group['field_id'].values.astype(int) if field_id != -1])
         
         if len(orig_field_radecs) != 1:
@@ -525,7 +527,7 @@ def main():
             plt.close()
 
         logger.info(f'Creating schedule gif for {night_idx}th night')
-        save_schedule(eval_metrics=eval_metrics, pd_group=night_group, save_dir=subdir_path, night_idx=night_idx, nside=nside, make_gifs=args.make_gifs, 
+        save_schedule(night_metrics=metrics, pd_group=night_group, save_dir=subdir_path, nside=nside, make_gifs=args.make_gifs, 
                       is_azel=test_dataset.hpGrid.is_azel, bin2pos_filepath=bin2pos_filepath, field2radec_filepath=field2radec_filepath)
         
 if __name__ == "__main__":
