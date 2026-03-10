@@ -7,7 +7,8 @@ import math
 from blancops.data_processing.data_processing import get_nautical_twilight
 
 from blancops.data_processing.data_processing import normalize_noncyclic_features, normalize_timestamp
-from blancops.utils import ephemerides, units
+from blancops.utils import units
+from blancops import ephemerides
 from blancops.utils.interpolate import interpolate_on_sphere
 import random
 from blancops.utils.geometry import angular_separation

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from blancops.utils import units, ephemerides
+from blancops.utils import units 
+from blancops import ephemerides
 import tempfile, os, shutil, glob
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt

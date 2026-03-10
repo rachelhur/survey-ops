@@ -12,7 +12,7 @@ import random
 from pathlib import Path
 
 from blancops.utils.interpolate import interpolate_on_sphere
-from blancops.utils import ephemerides
+from blancops import ephemerides
 from blancops.data_processing.data_processing import IDX2WAVE, FILTERWAVENORM
 import logging
 

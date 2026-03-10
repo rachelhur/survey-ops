@@ -8,7 +8,8 @@ import ephem
 from astropy.time import Time
 import torch
 
-from blancops.utils import ephemerides, units
+from blancops.utils units
+from blancops import ephemerides
 from tqdm import tqdm
 logger = logging.getLogger(__name__)
 

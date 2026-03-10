@@ -5,7 +5,7 @@ from collections import defaultdict
 
 from tqdm import tqdm
 
-from blancops.utils import ephemerides
+from blancops import ephemerides
 from blancops.data_processing.data_processing import *
 import pandas as pd
 import json
