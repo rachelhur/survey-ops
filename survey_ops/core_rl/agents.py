@@ -1,0 +1,500 @@
+from random import random
+import gymnasium as gym
+from collections import defaultdict
+import torch
+import numpy as np
+from tqdm import tqdm
+import time
+from typing import Tuple
+import os
+import pickle
+import random
+from pathlib import Path
+
+from survey_ops.utils.interpolate import interpolate_on_sphere
+from survey_ops.utils import ephemerides
+from survey_ops.coreRL.data_processing import IDX2WAVE, FILTERWAVENORM
+import logging
+
+# Get the logger associated with this module's name (e.g., 'my_module')
+logger = logging.getLogger(__name__)
+from tqdm.contrib.logging import logging_redirect_tqdm
+
+class Agent:
+    """
+    A simple, generic agent/wrapper for fitting and evaluating RL algorithms. 
+
+    This class abstracts training loops, evaluation, saving/loading, and interaction with environment. It expects an underlying `algorithm` object that
+    implements:
+        - `algorithm.train_step(batch)`
+        - `algorithm.select_action(obs, mask, epsilon)`
+        - `algorithm.policy_net`
+        - `algorithm.save(path)`
+        - `algorithm.load(path)`
+
+    Attributes
+    ----------
+        algorithm (Algorithm): Q-learning algorithm implementing train + act.
+        device (str): Device used by the algorithm ('cpu' or 'cuda').
+        normalize_obs (bool): Whether to normalize observations before acting.
+        env (gym.Env | None): Optional environment for evaluation.
+        outdir (str): Directory for saving weights and training/evaluation logs.
+
+    """
+    def __init__(
+            self,
+            algorithm,
+            train_outdir,
+            cfg=None,
+            # env: gym.Env = None,
+            ):
+        """
+        Args
+        ----
+            algorithm (Algorithm): The Q-learning algorithm
+            env (gymnasium.Env): The environment in which the agent will act.
+            outdir (str): directory to save results
+            normalize_obs (bool): Whether or not to normalize observations
+        """
+        if cfg is not None:
+            self._setup_from_config(cfg)
+        else:
+            self.algorithm = algorithm
+            self.device = algorithm.device
+            if not os.path.exists(train_outdir):
+                os.makedirs(train_outdir)
+            self.train_outdir = train_outdir
+    
+    def _setup_from_config(self, cfg):
+        # algorithm = setup_algorithm(save_dir=results_outdir, algorithm_name=cfg.get('experiment.algorithm.algorithm_name'), 
+        #                     obs_dim=train_dataset.obs_dim, num_actions=train_dataset.num_actions, loss_fxn=cfg.get('experiment.algorithm.loss_function'),
+        #                     hidden_dim=cfg.get('experiment.training.hidden_dim'), lr=cfg.get('experiment.training.lr'), lr_scheduler=lr_scheduler, 
+        #                     device=device, lr_scheduler_kwargs=lr_scheduler_kwargs, lr_scheduler_epoch_start=lr_scheduler_epoch_start, 
+        #                     lr_scheduler_num_epochs=lr_scheduler_num_epochs, gamma=cfg.get('experiment.algorithm.gamma'), 
+        #                     tau=cfg.get('experiment.algorithm.tau'), activation=cfg.get('experiment.model.activation_function'))
+        raise NotImplementedError
+
+        
+    def fit(self, num_epochs, dataset=None, batch_size=None, trainloader=None, valloader=None, patience=10, train_log_freq=10, hpGrid=None):
+        """Trains the agent on a transition dataset.
+
+        Uses repeated sampling from a dataset that implements `sample(batch_size)`
+        to perform Q-learning updates. Periodically evaluates accuracy on
+        expert actions to monitor learning progress.
+
+        Args:
+            dataset (object):
+                Must implement `sample(batch_size)` returning a full transition:
+                (obs, actions, rewards, next_obs, dones, action_masks).
+            num_epochs (int):
+                Number of passes through the dataset (used to compute steps).
+            batch_size (int):
+                Number of transitions per optimization step.
+
+        Saves:
+            - `<outdir>/weights.pt`: Final model weights.
+            - `<outdir>/train_metrics.pkl`: Dictionary containing:
+                - `loss_history`
+                - `q_history`
+                - `test_acc_history`
+        """
+        # assert dataset is not None and dataloader is not None
+        if trainloader is not None:
+            assert batch_size is not None
+        # Check that valloader is not empty
+        if valloader is not None and len(valloader) == 0:
+            raise ValueError("Validation dataloader is empty! Check dataset split logic.")
+        train_metrics = {
+            'train_loss': [],
+            'train_qvals': [],
+            'lr': [],
+            'epoch': []
+        }
+
+        val_metrics = {metric: [] for metric in self.algorithm.val_metrics}
+        val_metrics.update({'epoch': []})
+        val_train_metrics = {metric: [] for metric in self.algorithm.val_metrics}
+        val_train_metrics.update({'epoch': []})
+
+        save_filepath = self.train_outdir + 'best_weights.pt'
+        train_metrics_filepath = self.train_outdir + 'train_metrics.pkl'
+        val_metrics_filepath = self.train_outdir + 'val_metrics.pkl'
+        val_train_metrics_filepath = self.train_outdir + 'val_train_metrics.pkl'
+        self.algorithm.policy_net.train()
+
+        if trainloader is not None:
+            dataset_size = len(trainloader.dataset)
+            steps_per_epoch = np.max([dataset_size // batch_size, 1])
+            total_steps = int(num_epochs * steps_per_epoch) # ie, total number of times dataset is sampled
+            loader_iter = iter(trainloader)  # create iterator
+        else:
+            # TODO for v0 only - remove when model is updated for release
+            dataset_size = np.prod(dataset.obs.shape[1:])
+            total_steps = int(num_epochs * dataset_size / batch_size)
+            loader_iter = None  # not used for manual sampling
+            raise DeprecationWarning("Passing `dataset` and `batch_size` directly to `fit` is deprecated. Please use a DataLoader instead.")
+
+        best_val_loss = 1e5
+        best_epoch = 0
+        patience_cur = patience
+        use_patience = patience != 0
+        i_epoch = 0
+
+        # total_lr_scheduler_steps = int(args.lr_scheduler_max_epochs * iterations_per_epoch // args.lr_scheduler_step_freq)
+        logger.info(f"Total number of training steps: {total_steps}")
+        logger.info(f"Steps per epoch: {steps_per_epoch}")
+        logger.debug(f"Total number of lr scheduler steps: {self.algorithm.lr_scheduler_num_epochs if self.algorithm.lr_scheduler is not None else None}")
+        logger.info(f"Number of transitions in dataset: {len(trainloader.dataset)}")
+
+        with logging_redirect_tqdm():
+            pbar = tqdm(total=total_steps, dynamic_ncols=True, desc="Starting training")
+            for i_step in range(total_steps):
+                if trainloader is not None:
+                    try:
+                        batch = next(loader_iter)
+                    except StopIteration:
+                        loader_iter = iter(trainloader)
+                        batch = next(loader_iter)
+                else:
+                    batch = dataset.sample(batch_size)
+
+                if i_step % steps_per_epoch == 0:
+                    i_epoch += 1
+                    
+                pbar.update(1)
+
+                pbar.set_description(f"Epoch {i_epoch}/{int(num_epochs)} (step {i_step}/{total_steps})")
+                with torch.amp.autocast('cuda'):
+                    loss, q_val = self.algorithm.train_step(batch, epoch_num=i_epoch, step_num=i_step)
+                if i_step % train_log_freq == 0:
+                    train_metrics['train_loss'].append(loss)
+                    train_metrics['train_qvals'].append(q_val)  
+                    train_metrics['lr'].append(self.algorithm.optimizer.param_groups[0]["lr"])
+                    train_metrics['epoch'].append(i_epoch)
+                    # logger.debug(f"current LR is {train_metrics['lr'][-1]}")
+
+                # At end of each epoch, do validation check
+                with torch.no_grad():
+                    if i_step % steps_per_epoch == 0:
+                        
+                        if trainloader is not None:
+                            # --- evaluation from dataloader ---
+                            val_metric_sums = [0.0] * len(val_metrics)
+                            num_val_batches = len(valloader)
+
+                            for eval_batch in valloader:
+                                batch_metrics = self.algorithm.val_step(eval_batch, hpGrid)
+                                for idx, val in enumerate(batch_metrics):
+                                    val_metric_sums[idx] += val
+                                    
+                            # Average the metrics across all validation batches
+                            val_metric_vals = [total / num_val_batches for total in val_metric_sums]
+                            
+                            # Also calculate train metrics on a single batch (or average if preferred)
+                            val_train_metric_vals = self.algorithm.val_step(batch, hpGrid)
+                        else:
+                            # --- old method fallback ---
+                            eval_obs, expert_actions, _, _, _, action_masks = dataset.sample(batch_size)
+                        
+                        for metric_name, metric_val in zip(val_metrics.keys(), val_metric_vals):
+                            if metric_name != 'epoch':
+                                val_metrics[metric_name].append(metric_val)
+                        val_metrics['epoch'].append(i_epoch)
+                        for metric_name, metric_val in zip(val_train_metrics.keys(), val_train_metric_vals):
+                            if metric_name != 'epoch':
+                                val_train_metrics[metric_name].append(metric_val)
+                        val_train_metrics['epoch'].append(i_epoch)
+
+                        logger.info(
+                            f"Best val loss so far {best_val_loss:.3f} at epoch {best_epoch} \n" + \
+                            f"Validation check at train step {i_step} \n " + \
+                                " ".join(
+                                    f"{k} = {v:.3f} | " for k, v in zip(val_metrics.keys(), val_metric_vals)
+                                ) + "\n" + \
+                                " (train batch)" + \
+                                " ".join(
+                                    f"{k} = {v:.3f} | " for k, v in zip(val_train_metrics.keys(), val_train_metric_vals)
+                                )
+                        )
+
+                        val_loss_cur = val_metrics['val_loss'][-1]
+
+                        if val_loss_cur < best_val_loss and best_val_loss != val_loss_cur and i_step % steps_per_epoch ==0:
+                            best_val_loss = val_loss_cur
+                            best_epoch = i_epoch
+                            patience_cur = patience
+                            logger.info(f'Improved model at step {i_step}. New best val loss is {val_loss_cur:.3f} Saving weights.')
+                            self.save(save_filepath)
+                            with open(train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(train_metrics, handle)
+                            with open(val_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_metrics, handle)
+                            with open(val_train_metrics_filepath, 'wb') as handle:
+                                pickle.dump(val_train_metrics, handle)
+                        elif use_patience:
+                            patience_cur -= 1
+                            logger.debug(f"Patience left: {patience_cur}")
+                            if patience_cur == 0:
+                                logger.info("No patience left. Ending training.")
+                                break
+        
+        logger.info(f"Best val loss was {best_val_loss:.3f} at epoch {best_epoch}")
+        with open(train_metrics_filepath, 'wb') as handle:
+            pickle.dump(train_metrics, handle)
+        with open(val_metrics_filepath, 'wb') as handle:
+            pickle.dump(val_metrics, handle)
+        with open(val_train_metrics_filepath, 'wb') as handle:
+            pickle.dump(val_train_metrics, handle)
+    
+    def evaluate(self, env, cfg, num_episodes, field_choice_method='interp', eval_outdir=None, field2nvisits=None, field2radec=None):
+        """Evaluates the agent in an environment for multiple episodes.
+        """
+        eval_outdir = eval_outdir if eval_outdir is not None else self.train_outdir + 'evaluation/'
+        if not os.path.exists(eval_outdir):
+            os.makedirs(eval_outdir)
+            
+        # evaluation metrics
+        self.algorithm.policy_net.eval()
+        episode_rewards = []
+        eval_metrics = {}
+
+        field2nvisits = env.unwrapped.field2maxvisits if field2nvisits is None else field2nvisits
+        field2radec = env.unwrapped.field2radec if field2radec is None else field2radec
+        
+        hpGrid = None if cfg['data']['bin_method'] != 'healpix' else ephemerides.HealpixGrid(nside=cfg['data']['nside'], is_azel=('azel' in cfg['data']['bin_space']))
+        bin_space = cfg['data']['bin_space']
+
+        with logging_redirect_tqdm():
+            for episode in tqdm(range(num_episodes)):
+                state, info = env.reset()
+                episode_reward = 0
+                terminated = False
+                truncated = False
+                num_nights = env.unwrapped.max_nights
+                # glob_observations = {f'night-0': [] for i in range(num_nights)}
+                # bin_observations = {f'night-0': [] for i in range(num_nights)}
+                # rewards = {f'night-0': [] for i in range(num_nights)}
+                # timestamps = {f'night-0': [] for i in range(num_nights)}
+                # fields = {f'night-0': [] for i in range(num_nights)}
+                # bins = {f'night-0': [] for i in range(num_nights)}
+                # filters = {f'night-0': [] for i in range(num_nights)}
+                glob_observations = {}
+                bin_observations = {}
+                rewards = {}
+                timestamps = {}
+                fields = {}
+                bins = {}
+                filters = {}
+
+                reward = 0
+                night_idx = 0
+
+                # Append first night's zenith state
+                glob_observations[f'night-0'] = [state['global_state']]
+                bin_observations[f'night-0'] = [state['bin_state']]
+                rewards[f'night-0'] = [reward]
+                timestamps[f'night-0'] = [info.get('timestamp')]
+                fields[f'night-0'] = [-1]
+                bins[f'night-0'] = [-1]
+                filters[f'night-0'] = [0.]
+
+                i = 0
+                last_bin_idx = -1
+                pbar = tqdm(total=250*num_nights, dynamic_ncols=True, desc=f"Rolling out policy for night {night_idx} step {i}")
+                while not (terminated or truncated):
+                    with torch.no_grad():
+                        action_mask = info.get('action_mask', None)
+                        logger.debug(f'agent evaluate action_mask.shape {action_mask.shape}')
+
+                        # Catch the edge case where no fields are above the horizon - tell agent to wait
+                        if not action_mask.any():
+                            logger.warning(f"No valid fields available at step {i} (mask is all zeros).")
+                            bin_idx, field_id, filter_wave = -2, -2, 0.
+                        else:
+                            action = self.act(x_glob=state['global_state'], x_bin=state['bin_state'], action_mask=action_mask, epsilon=None)
+                            if 'filter' in bin_space:
+                                bin_idx = action // self.algorithm.num_filters
+                                filter_idx = action % self.algorithm.num_filters
+                                filter_wave = IDX2WAVE[filter_idx] / FILTERWAVENORM
+                                logger.debug(f"agent evaluate bin_idx: {bin_idx}")
+                            else:
+                                bin_idx = action
+                                filter_idx = None
+                                filter_wave = 0.
+
+                            valid_fields_per_bin = info.get('valid_fields_per_bin', {})
+                            fields_in_bin = np.array(valid_fields_per_bin.get(int(bin_idx), []))
+                            if len(fields_in_bin) == 0:
+                                raise ValueError(f"No valid fields in bin {action}.")
+                            field_id = self.choose_field(obs=(state['global_state'], state['bin_state']), info=info, field2nvisits=field2nvisits, 
+                                                        field2radec=field2radec, hpGrid=hpGrid, field_choice_method=field_choice_method, fields_in_bin=fields_in_bin,
+                                                        filter_idx=filter_idx)#, num_filters=self.algorithm.num_filters)
+                        is_first_wait = (bin_idx == -2) and (last_bin_idx != -2)
+                        is_real_obs = bin_idx >= 0
+                        if is_first_wait or is_real_obs:
+                            glob_observations[f'night-{night_idx}'].append(state['global_state'])
+                            bin_observations[f'night-{night_idx}'].append(state['bin_state'])
+                            rewards[f'night-{night_idx}'].append(reward)
+                            timestamps[f'night-{night_idx}'].append(info.get('timestamp'))
+                            fields[f'night-{night_idx}'].append(field_id)
+                            bins[f'night-{night_idx}'].append(bin_idx)
+                            filters[f'night-{night_idx}'].append(filter_wave)
+                        
+                        last_bin_idx = bin_idx
+                        # Step environment
+                        actions = {'bin': np.int32(bin_idx), 'field_id': np.int32(field_id), 'filter': np.array([filter_wave], dtype=np.float32)}
+                        state, reward, terminated, truncated, info = env.step(actions)
+                        if terminated or truncated:
+                            break
+
+                        # Track total reward
+                        episode_reward += reward
+
+                        # Log zenith state if is new night
+                        if info.get('night_idx') != night_idx:
+                            night_idx = info.get('night_idx')
+                            glob_observations[f'night-{night_idx}'] = [state['global_state']]
+                            bin_observations[f'night-{night_idx}'] = [state['bin_state']]
+                            rewards[f'night-{night_idx}'] = [reward]
+                            timestamps[f'night-{night_idx}'] = [info.get('timestamp')]
+                            fields[f'night-{night_idx}'] = [field_id]
+                            bins[f'night-{night_idx}'] = [bin_idx]
+                            filters[f'night-{night_idx}'] = [filter_wave]
+
+                        # pbar update
+                        i += 1
+                        pbar.update(1)
+                        pbar.set_description(f"Rolling out policy for night {night_idx} step {i}")
+            pbar.close()
+            for n_idx in range(night_idx):
+                glob_observations[f'night-{n_idx}'] = np.array(glob_observations[f'night-{n_idx}'])
+                bin_observations[f'night-{n_idx}'] = np.array(bin_observations[f'night-{n_idx}'])
+                rewards[f'night-{n_idx}'] = np.array(rewards[f'night-{n_idx}'])
+                timestamps[f'night-{n_idx}'] = np.array(timestamps[f'night-{n_idx}'])
+                fields[f'night-{n_idx}'] = np.array(fields[f'night-{n_idx}'])
+                bins[f'night-{n_idx}'] = np.array(bins[f'night-{n_idx}'])
+                filters[f'night-{n_idx}'] = np.array(filters[f'night-{n_idx}'])
+            eval_metrics.update({f'ep-{episode}': {
+                'glob_observations': glob_observations,
+                'bin_observations': bin_observations,
+                'rewards': rewards,
+                'timestamp': timestamps,
+                'field_id': fields,
+                'bin': bins,
+                'filters': filters,
+            }})
+            
+            episode_rewards.append(episode_reward)
+            logger.info(f'terminated at step {i}')
+
+        eval_metrics.update({
+            'mean_reward': np.mean(episode_rewards),
+            'std_reward': np.std(episode_rewards),
+            'min_reward': np.min(episode_rewards),
+            'max_reward': np.max(episode_rewards),
+            'episode_rewards': episode_rewards,
+        })
+
+        with open(Path(eval_outdir) / 'eval_metrics.pkl', 'wb') as handle:
+            pickle.dump(eval_metrics, handle)
+            logger.info(f'eval_metrics.pkl saved in {eval_outdir}')
+
+    def act(self, x_glob, x_bin, action_mask, epsilon):
+        """Selects an action using the underlying algorithm.
+
+        Args:
+            x_glob (array-like):
+                Pointing and global state features (normalized if applicable).
+            x_bin (array-like):
+                Per-bin features (normalized if applicable).
+            action_mask (array-like | None):
+                Boolean mask indicating which actions are legal.
+            epsilon (float | None):
+                Epsilon for epsilon-greedy exploration. If None, selects greedily.
+
+        Returns:
+            int: Selected action index.
+        """
+        # Add a batch dimension (axis 0) if it's missing
+        # if x_bin.ndim == 2:
+        #     x_bin = np.expand_dims(x_bin, axis=0)
+        # if x_glob.ndim == 1:
+        #     x_glob = np.expand_dims(x_glob, axis=0)
+        
+
+        # if action_mask is not None and action_mask.ndim == 1:
+        #     action_mask = np.expand_dims(action_mask, axis=0)
+            
+        return self.algorithm.select_action(x_glob=x_glob, x_bin=x_bin, action_mask=action_mask, epsilon=epsilon)
+    
+    def save(self, filepath):
+        """Saves algorithm parameters to a file.
+
+        Args:
+            filepath (str): Destination path for serialized model weights.
+        """
+        self.algorithm.save(filepath)
+    
+    def load(self, filepath):
+        """Loads algorithm parameters from a file.
+
+        Args:
+            filepath (str): Path to previously saved model weights.
+        """
+        self.algorithm.load(filepath)
+
+    def choose_field(self, obs, info, field2nvisits, field2radec, hpGrid, field_choice_method, fields_in_bin, filter_idx): 
+        """
+        Choose field in bin based on interpolated Q-values
+        """
+        assert len(fields_in_bin) != 0, "The agent is receiving an empty list for `fields_in_bin`. "
+        glob_state, bin_state = obs
+        visited = info.get('visited', None)
+        action_mask = info.get('action_mask', None)
+        field_ids_in_bin = [fid for fid in fields_in_bin if visited[fid] < field2nvisits[fid]]
+
+        if field_choice_method == 'interp':
+            with torch.no_grad():
+                glob_state = torch.as_tensor(glob_state, device=self.device, dtype=torch.float32)
+                bin_state = torch.as_tensor(bin_state, device=self.device, dtype=torch.float32)
+                action_mask = torch.as_tensor(action_mask, device=self.device, dtype=torch.bool)
+                q_vals = self.algorithm.policy_net(glob_state, bin_state).squeeze(0)
+                q_vals = q_vals.cpu().detach().numpy() #TODO - use mask
+
+            lon_data = hpGrid.lon
+            lat_data = hpGrid.lat
+
+            target_lonlats = np.array([field2radec[fid] for fid in field_ids_in_bin])
+            if hpGrid.is_azel:
+                timestamp = info.get('timestamp')
+                target_lons, target_lats = ephemerides.equatorial_to_topographic(ra=target_lonlats[:, 0], dec=target_lonlats[:, 1], time=timestamp)
+            else:
+                target_lons = target_lonlats[:, 0]
+                target_lats = target_lonlats[:, 1]
+
+            q_interpolated = interpolate_on_sphere(target_lons, target_lats, lon_data, lat_data, q_vals)
+            best_idx = np.argmax(q_interpolated[action_mask])
+            best_field = field_ids_in_bin[best_idx]
+
+            return best_field
+        elif field_choice_method == 'random':
+            field_id = random.choice(field_ids_in_bin)
+            return field_id
+        
+    def choose_filter(self, filter2wave=None):
+        if filter2wave is None:
+            # Filter wavelengths (nm) according to obztak https://github.com/kadrlica/obztak/blob/c28fab23b09bcff1cf46746eae4ec7e40aeb7f7a/obztak/seeing.py#L22
+            filter2wave = {
+                'u': 380,
+                'g': 480,
+                'r': 640,
+                'i': 780,
+                'z': 920,
+                'Y': 990
+            }
+        normalized_waves = np.array(list(filter2wave.values())) / 1000
+        filter_wave = random.choice(normalized_waves)
+        return filter_wave
+        
+    def _save_SISPI_schedule(self, outdir):
+        return

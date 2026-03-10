@@ -1,105 +1,91 @@
-
-import os
-import pickle
 import sys
 import logging
-logger = logging.getLogger(__name__)
+from pathlib import Path
+import json 
+import importlib.resources as pkg_resources
+import os
 
 import numpy as np
+import random
 import torch
-import pandas as pd
-import fitsio
-
-from survey_ops.src.offline_dataset import OfflineDECamDataset
-from survey_ops.src.algorithms import DDQN, BehaviorCloning
-import torch.nn as nn
-import torch.nn.functional as F
 
 
+def seed_everything(seed, deterministic=False):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # Multi-GPU
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = False
 
-def setup_algorithm(save_dir=None, algorithm_name=None, obs_dim=None, num_actions=None, loss_fxn=None, hidden_dim=None, lr=None, lr_scheduler=None, device=None, 
-                    lr_scheduler_kwargs=None, gamma=None, tau=None, lr_scheduler_epoch_start=None, lr_scheduler_num_epochs=None, activation=None, 
-                    use_double=None):
-    assert loss_fxn is not None
-    if activation == 'relu':
-        activation = F.relu
-    elif activation == 'mish':
-        activation = F.mish
-    elif activation == 'swish':
-        activation = F.silu
+def get_workspace_dir() -> Path:
+    """Determines the active workspace. Priority: (1) environment variable (2) pointer file (saved in model-init) (3) default"""
+    env_workspace = os.getenv("SURVEY_OPS_WORKSPACE")
+    if env_workspace:
+        return Path(env_workspace).resolve()
         
-    # Set up model hyperparameters that are algorithm independent
-    model_hyperparams = {
-        'obs_dim': obs_dim,
-        'num_actions': num_actions, 
-        'hidden_dim': hidden_dim,
-        'lr': lr,
-        'lr_scheduler': lr_scheduler,
-        'lr_scheduler_kwargs': lr_scheduler_kwargs,
-        'lr_scheduler_epoch_start': lr_scheduler_epoch_start,
-        'lr_scheduler_num_epochs': lr_scheduler_num_epochs,
-        'loss_fxn': loss_fxn,
-        'activation': activation
-    }
-        
-    if algorithm_name == 'DDQN' or algorithm_name == 'DQN':
-        assert gamma is not None, "Gamma (discount factor) must be specified for DDQN."
-        assert tau is not None, "Tau (target network update rate) must be specified for DDQN."
-        # assert loss_fxn in ['mse', 'huber'], "DDQN only supports mse or huber loss functions."
-        
-        if loss_fxn is not None and type(loss_fxn) != str:
-            loss_fxn = loss_fxn
-        elif loss_fxn == 'mse':
-            loss_fxn = nn.MSELoss(reduction='mean')
-        elif loss_fxn == 'huber':
-            loss_fxn = nn.HuberLoss(reduction='mean')
-        else:
-            print(loss_fxn)
-            raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
+    pointer_file = Path.home() / ".survey_ops_profile"
+    if pointer_file.exists():
+        saved_path = pointer_file.read_text().strip()
+        if saved_path:
+            return Path(saved_path).resolve()
+            
+    # 3. Fallback to default
+    return Path.home() / ".survey_ops"
 
-        model_hyperparams .update( {
-            'gamma': gamma,
-            'tau': tau,
-            'use_double': algorithm_name == 'ddqn',
-            'loss_fxn': loss_fxn
-        } )
-
-        algorithm = DDQN(
-            device=device,
-            **model_hyperparams
+def load_global_config(config_path=None):
+    """Loads a custom config if provided, otherwise loads the default from the package."""
+    if config_path is None:
+        workspace_dir = get_workspace_dir()
+        config_path = workspace_dir / "configs" / "global_config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Could not find global_config.json at {config_path}.\n"
+            "Need to run `model-init` to set up workspace"
         )
-
-    elif algorithm_name == 'BC':
-        if loss_fxn is not None and type(loss_fxn) != str:
-            loss_fxn = loss_fxn
-        elif loss_fxn == 'cross_entropy':
-            loss_fxn = nn.CrossEntropyLoss(reduction='mean')
-        elif loss_fxn == 'mse':
-            loss_fxn = nn.MSELoss(reduction='mean')
-        else:
-            print(loss_fxn)
-            raise NotImplementedError(f'Loss function {loss_fxn} not yet implemented for {algorithm_name}')
-        
-        model_hyperparams.update({
-        'loss_fxn': loss_fxn
-        })
-        algorithm = BehaviorCloning(
-            device=device,
-            **model_hyperparams
-        )
+    with open(config_path, 'r') as f:
+        return json.load(f)
+    
+def load_model_config(config_path=None):
+    """Loads a custom config if provided, otherwise loads the default from the package."""
+    if config_path:
+        with open(config_path, 'r') as f:
+            return json.load(f)
     else:
-        raise NotImplementedError
+        # Load the default config bundled inside your package (e.g., survey_ops/global_config.json)
+        # This works no matter where the package is installed!
+        config_text = pkg_resources.files('survey_ops').joinpath('configs/default_model_config.json').read_text()
+        return json.loads(config_text)
 
-    if save_dir is not None:
-        model_hyperparams['algorithm_name'] = algorithm_name
-        with open(save_dir + 'model_hyperparams.pkl', 'wb') as f:
-            pickle.dump(model_hyperparams, f)
-    return algorithm
+def save_config(args=None, config_dict=None, outdir=None):
+    """Saves the experiment arguments as a nested JSON."""
+    out_path = Path(outdir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    
+    # Convert argparse Namespace to nested dict
+    if args is not None:
+        config_dict = dict_to_nested(vars(args))
+    
+    with open(out_path / "config.json", "w") as f:
+        json.dump(config_dict, f, indent=4)
 
+
+def dict_to_nested(data):
+    """Converts {'model.lr': 0.1} to {'model': {'lr': 0.1}}"""
+    nested = {}
+    for key, value in data.items():
+        keys = key.split('.')
+        d = nested
+        for k in keys[:-1]:
+            d = d.setdefault(k, {})
+        d[keys[-1]] = value
+    return nested
 
 def setup_logger(save_dir, logging_filename, logging_level='debug'):
     # Create logger
-    logger = logging.getLogger()
+    logger = logging.getLogger(__name__)
+    #logger = logging.getLogger()
     if logging_level == 'debug':
         logger.setLevel(logging.DEBUG)
     elif logging_level == 'info':
@@ -114,7 +100,7 @@ def setup_logger(save_dir, logging_filename, logging_level='debug'):
     # Create handlers
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.DEBUG)
-    file_handler = logging.FileHandler(save_dir + logging_filename, mode='w')
+    file_handler = logging.FileHandler(save_dir / logging_filename, mode='w')
     file_handler.setLevel(logging.DEBUG)
     
     # Create formatters and add to handlers
@@ -133,54 +119,3 @@ def get_device():
         "cpu"   
     )
     return device
-
-def load_raw_data_to_dataframe(fits_path, json_path):
-    try:
-        # --- Load json df ---- #
-        df = pd.read_json(json_path)
-        logger.info('Loaded data from json')
-    except:
-        # --- Load fits ---- #
-        logger.info(f"Could not find json file {json_path}. Processing data from fits file {fits_path}.")
-        d = fitsio.read(fits_path)
-        sel = (d['propid'] == '2012B-0001') & (d['exptime'] > 40) & (d['exptime'] < 100) & (~np.isnan(d['teff']))
-        selected_d = d[sel]
-        column_names = selected_d.dtype.names
-        df = pd.DataFrame(selected_d, columns=column_names)
-    return df
-
-# def save_field_and_bin_schedules(eval_metrics, pd_group, outdir, date_str):
-#     # Save timestamps, field_ids, and bin numbers
-#     _timestamps = eval_metrics['ep-0']['timestamp'] \
-#                 if len(eval_metrics['ep-0']['timestamp']) > len(pd_group['timestamp']) \
-#                 else pd_group['timestamp'] 
-#     eval_field_schedule = {
-#         'time': _timestamps,
-#         'field_id': eval_metrics['ep-0']['field_id']
-#     }
-    
-#     expert_field_schedule = {
-#         'time': _timestamps,
-#         'field_id': pd_group['field_id'].values
-#     }
-    
-#     bin_schedule = {
-#         'time': _timestamps,
-#         'policy_bin_id': eval_metrics['ep-0']['bin'].astype(np.int32),
-#         'bin_id': pd_group['bin'].values
-#     }
-    
-#     if not os.path.exists(outdir):
-#         os.makedirs(outdir)
-#     for data, filename in zip(
-#         [expert_field_schedule, eval_field_schedule, bin_schedule],
-#         ['expert_field_schedule.csv', 'new_field_schedule.csv', 'bin_schedule.csv']
-#         ):
-#         series_data = {key: pd.Series(value) for key, value in data.items()}
-#         _df = pd.DataFrame(series_data)
-#         if 'bin' in filename:
-#             _df['policy_bin_id'] = _df['policy_bin_id'].fillna(0).astype('Int64')
-#             _df['bin_id'] = _df['bin_id'].fillna(0).astype('Int64')
-#         output_filepath = outdir + f'_{date_str}' + filename
-#         with open(output_filepath, 'w') as f:
-#             _df.to_csv(f, index=False)

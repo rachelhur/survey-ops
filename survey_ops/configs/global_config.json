@@ -1,0 +1,70 @@
+{
+  "features": {
+    "CYCLICAL_FEATURE_NAMES": [
+      "ra",
+      "az",
+      "ha",
+      "lst"
+    ],
+    "MAX_NORM_FEATURE_NAMES": [
+      "el",
+      "dec"
+    ],
+    "INVERSE_NORM_FEATURES_NAMES": [
+	  "airmass"
+	  ],
+    "ANG_DISTANCE_NORM_FEATURE_NAMES": [
+      "distance"
+    ],
+    "GLOBAL_FEATURES": [
+      "ra",
+      "dec",
+      "az",
+      "el",
+      "airmass",
+      "ha",
+      "sun_ra",
+      "sun_dec",
+      "sun_az",
+      "sun_el",
+      "moon_ra",
+      "moon_dec",
+      "moon_az",
+      "moon_el",
+      "filter_wave",
+      "lst",
+      "time_fraction_since_start"
+    ],
+    "BIN_FEATURES": [
+      "ha",
+      "airmass",
+      "moon_distance",
+      "night_num_unvisited_fields",
+      "night_num_incomplete_fields",
+      "night_min_tiling",
+      "survey_num_unvisited_fields",
+      "survey_num_incomplete_fields",
+      "survey_min_tiling",
+      "az",
+      "el",
+      "ra",
+      "dec",
+      "angular_distance_to_pointing"
+    ]
+  },
+  "files": {
+    "DECFITS": "decam-exposures-20251211.fits",
+    "FIELD2RADEC": "field2radec.json",
+    "FIELD2NAME": "field2name.json",
+    "FIELD2MAXVISITS_TRAIN": "field2nvisits_default1.json",
+    "FIELD2MAXVISITS_EVAL": "field2nvisits_default0.json",
+    "NIGHT2FIELDVISITS": "night2fieldhistory.pkl",
+    "NIGHT2FILTERVISITS": "night2filterhistory.pkl",
+    "FIELD2FILTERS": "field2filters.pkl"
+  },
+  "paths": {
+    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
+    "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
+    "SURVEY_OPS": "/home/hurra/Projects/survey-ops/"
+    }
+}

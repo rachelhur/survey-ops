@@ -1,38 +1,27 @@
 import json
+import os
 
-class Config:
-    def __init__(self, config_path):
-        self.config_path = config_path
-        with open(config_path) as f:
-            self._data = json.load(f)
+from pathlib import Path
 
-    def get(self, path=None, default=None):
-        if path is None:
-            return self._data
+def dict_to_nested(data):
+    """Converts {'model.lr': 0.1} to {'model': {'lr': 0.1}}"""
+    nested = {}
+    for key, value in data.items():
+        keys = key.split('.')
+        d = nested
+        for k in keys[:-1]:
+            d = d.setdefault(k, {})
+        d[keys[-1]] = value
+    return nested
 
-        node = self._data
-        for key in path.split("."):
-            if not isinstance(node, dict):
-                return default
-            node = node.get(key, default)
-            if node is default:
-                return default
-        return node
+def save_config(args=None, config_dict=None, outdir=None):
+    """Saves the experiment arguments as a nested JSON."""
+    out_path = Path(outdir)
+    out_path.mkdir(parents=True, exist_ok=True)
     
-    def set(self, path, value):
-        keys = path.split(".")
-        node = self._data
-
-        # walk to parent
-        for key in keys[:-1]:
-            if key not in node or not isinstance(node[key], dict):
-                node[key] = {}
-            node = node[key]
-
-        node[keys[-1]] = value
-
-    def save(self, path=None, indent=2):
-        path = path or self.config_path
-        with open(path, "w") as f:
-            json.dump(self._data, f, indent=indent)
-
+    # Convert argparse Namespace to nested dict
+    if args is not None:
+        config_dict = dict_to_nested(vars(args))
+    
+    with open(out_path / "config.json", "w") as f:
+        json.dump(config_dict, f, indent=4)
