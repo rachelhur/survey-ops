@@ -9,3 +9,12 @@ version = "0.1.0"
 
 [tool.setuptools.packages.find]
 include = ["survey_ops*"]
+
+[project.scripts]
+model-init = "survey_ops.scripts.init:main"
+model-train = "survey_ops.scripts.train:main"
+model-eval = "survey_ops.scripts.eval:main"
+model-schedule = "survey_ops.scripts.schedule:main"
+
+[tool.setuptools.package-data]
+"survey_ops.configs" = ["*.json"]
