@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from blancops.core_rl.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
-from blancops.utils import geometry
+from blancops.math import geometry
 
 import logging
 logger = logging.getLogger(__name__)

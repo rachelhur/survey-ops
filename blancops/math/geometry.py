@@ -1,5 +1,5 @@
 import numpy as np
-from blancops.utils import units
+from blancops.math import units
 
 
 def angular_separation(pos1, pos2):

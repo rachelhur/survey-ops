@@ -1,5 +1,5 @@
 import numpy as np
-from blancops.utils import units
+from blancops.math import units
 
 # Hardcoded seeing conversion factors between bands
 # Copied from obztak seeing.py, which in turn got them from Eric Neilsen

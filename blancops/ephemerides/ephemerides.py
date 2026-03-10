@@ -2,7 +2,7 @@ import ephem
 from datetime import datetime, timezone
 import numpy as np
 import healpy as hp
-from blancops.utils import units
+from blancops.math import units
 
 
 def blanco_observer(time=None):
@@ -373,7 +373,7 @@ class HealpixGrid:
         ang_seps : array of floats
             Angular separations between pixel centers and the requested lon/lat position
         """
-        from blancops.utils.geometry import angular_separation
+        from blancops.math.geometry import angular_separation
 
         return angular_separation((lon, lat), (self.lon, self.lat))
 

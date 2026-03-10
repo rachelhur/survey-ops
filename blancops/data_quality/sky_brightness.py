@@ -1,6 +1,6 @@
 from pathlib import Path
 from skybright.skybright import MoonSkyModel
-from blancops.utils import units
+from blancops.math import units
 from astropy.time import Time
 import numpy as np
 from configparser import ConfigParser
