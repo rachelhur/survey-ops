@@ -21,18 +21,18 @@ def seed_everything(seed, deterministic=False):
 
 def get_workspace_dir() -> Path:
     """Determines the active workspace. Priority: (1) environment variable (2) pointer file (saved in model-init) (3) default"""
-    env_workspace = os.getenv("SURVEY_OPS_WORKSPACE")
+    env_workspace = os.getenv("blancops_WORKSPACE")
     if env_workspace:
         return Path(env_workspace).resolve()
         
-    pointer_file = Path.home() / ".survey_ops_profile"
+    pointer_file = Path.home() / ".blancops_profile"
     if pointer_file.exists():
         saved_path = pointer_file.read_text().strip()
         if saved_path:
             return Path(saved_path).resolve()
             
     # 3. Fallback to default
-    return Path.home() / ".survey_ops"
+    return Path.home() / ".blancops"
 
 def load_global_config(config_path=None):
     """Loads a custom config if provided, otherwise loads the default from the package."""
@@ -53,9 +53,9 @@ def load_model_config(config_path=None):
         with open(config_path, 'r') as f:
             return json.load(f)
     else:
-        # Load the default config bundled inside your package (e.g., survey_ops/global_config.json)
+        # Load the default config bundled inside your package (e.g., blancops/global_config.json)
         # This works no matter where the package is installed!
-        config_text = pkg_resources.files('survey_ops').joinpath('configs/default_model_config.json').read_text()
+        config_text = pkg_resources.files('blancops').joinpath('configs/default_model_config.json').read_text()
         return json.loads(config_text)
 
 def save_config(args=None, config_dict=None, outdir=None):

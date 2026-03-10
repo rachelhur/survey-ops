@@ -4,17 +4,17 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "survey_ops"
+name = "blancops"
 version = "0.1.0"
 
 [tool.setuptools.packages.find]
-include = ["survey_ops*"]
+include = ["blancops*"]
 
 [project.scripts]
-model-init = "survey_ops.scripts.init:main"
-model-train = "survey_ops.scripts.train:main"
-model-eval = "survey_ops.scripts.eval:main"
-model-schedule = "survey_ops.scripts.schedule:main"
+model-init = "blancops.scripts.init:main"
+model-train = "blancop.scripts.train:main"
+model-eval = "blancops.scripts.eval:main"
+model-schedule = "blancops.scripts.schedule:main"
 
 [tool.setuptools.package-data]
-"survey_ops.configs" = ["*.json"]
+"blancops.configs" = ["*.json"]

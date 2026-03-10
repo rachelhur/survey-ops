@@ -2,8 +2,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from survey_ops.core_rl.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
-from survey_ops.utils import geometry
+from blancops.core_rl.neural_nets import MLP, SingleScoreMLP, BinEmbeddingDQN, MultiScoreMLP
+from blancops.utils import geometry
 
 import logging
 logger = logging.getLogger(__name__)

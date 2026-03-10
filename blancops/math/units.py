@@ -4,7 +4,7 @@ import numpy as np
 # ======================================================================================
 # unit conversion constants
 # intended use:
-# - survey_ops assumes native units throughout code (for instance, all angles are rad)
+# - blancops assumes native units throughout code (for instance, all angles are rad)
 # - multiply by units to convert to the native units (ex: my_ang = 30 * units.deg)
 # - divide by units to convert from native unit (ex: my ang_in_deg = my_ang / units.deg)
 # ======================================================================================

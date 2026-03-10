@@ -8,8 +8,8 @@ def main():
     parser.add_argument(
         '--workspace', 
         type=Path, 
-        default=Path(os.getenv("SURVEY_OPS_WORKSPACE", Path.home() / ".survey_ops")),
-        help="Target directory to initialize the workspace. Defaults to ~/.survey_ops"
+        default=Path(os.getenv("blancops_WORKSPACE", Path.home() / ".blancops")),
+        help="Target directory to initialize the workspace. Defaults to ~/.blancops"
     )
     parser.add_argument(
         '--force',
@@ -43,13 +43,13 @@ def main():
     else:
         try:
             # Copy global_config.json from within package to config_dest
-            config_text = pkg_resources.files('survey_ops.configs').joinpath('global_config.json').read_text()
+            config_text = pkg_resources.files('blancops.configs').joinpath('global_config.json').read_text()
             config_dest.write_text(config_text)
             print(f"  [+] Copied default global_config.json to: {config_dest}")
         except Exception as e:
             print(f"  [!] Failed to copy config. Reason: {e}")
     # save workspace pointer file
-    pointer_file = Path.home() / ".survey_ops_profile"
+    pointer_file = Path.home() / ".blancops_profile"
     pointer_file.write_text(str(workspace))
     print(f"  [+] Saved workspace pointer to {pointer_file}")
 

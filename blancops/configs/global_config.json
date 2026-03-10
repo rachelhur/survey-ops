@@ -65,6 +65,6 @@
   "paths": {
     "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
     "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
-    "SURVEY_OPS": "/home/hurra/Projects/survey-ops/"
+    "blancops": "/home/hurra/Projects/survey-ops/"
     }
 }

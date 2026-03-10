@@ -1,4 +1,4 @@
-"""Top-level package for survey_ops."""
+"""Top-level package for blancops."""
 
 __all__ = [
 	"algorithms",

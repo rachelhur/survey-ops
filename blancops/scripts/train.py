@@ -8,14 +8,14 @@ import torch
 import time
 import pickle
 
-from survey_ops.core_rl.agents import Agent
-from survey_ops.algorithms.factory import setup_algorithm
-from survey_ops.utils import geometry
-from survey_ops.utils import units
-from survey_ops.utils.sys_utils import setup_logger, get_device, seed_everything
-from survey_ops.data_processing.data_processing import load_raw_data_to_dataframe 
-from survey_ops.data_processing.offline_dataset import OfflineDataset
-from survey_ops.utils.sys_utils import save_config, load_global_config, dict_to_nested, get_workspace_dir
+from blancops.core_rl.agents import Agent
+from blancops.algorithms.factory import setup_algorithm
+from blancops.utils import geometry
+from blancops.utils import units
+from blancops.utils.sys_utils import setup_logger, get_device, seed_everything
+from blancops.data_processing.data_processing import load_raw_data_to_dataframe 
+from blancops.data_processing.offline_dataset import OfflineDataset
+from blancops.utils.sys_utils import save_config, load_global_config, dict_to_nested, get_workspace_dir
 
 import argparse
 import logging

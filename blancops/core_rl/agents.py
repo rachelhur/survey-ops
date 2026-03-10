@@ -11,9 +11,9 @@ import pickle
 import random
 from pathlib import Path
 
-from survey_ops.utils.interpolate import interpolate_on_sphere
-from survey_ops.utils import ephemerides
-from survey_ops.data_processing.data_processing import IDX2WAVE, FILTERWAVENORM
+from blancops.utils.interpolate import interpolate_on_sphere
+from blancops.utils import ephemerides
+from blancops.data_processing.data_processing import IDX2WAVE, FILTERWAVENORM
 import logging
 
 # Get the logger associated with this module's name (e.g., 'my_module')

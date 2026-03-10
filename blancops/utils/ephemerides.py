@@ -1,3 +1,3 @@
-"""Compatibility shim for ephemerides helpers moved to survey_ops.ephemerides."""
+"""Compatibility shim for ephemerides helpers moved to blancops.ephemerides."""
 
-from survey_ops.ephemerides.ephemerides import *  # noqa: F401,F403
+from blancops.ephemerides.ephemerides import *  # noqa: F401,F403

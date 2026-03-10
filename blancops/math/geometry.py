@@ -1,5 +1,5 @@
 import numpy as np
-from survey_ops.utils import units
+from blancops.utils import units
 
 
 def angular_separation(pos1, pos2):

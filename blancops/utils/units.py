@@ -1,3 +1,3 @@
-"""Compatibility shim for units helpers moved to survey_ops.math."""
+"""Compatibility shim for units helpers moved to blancops.math."""
 
-from survey_ops.math.units import *  # noqa: F401,F403
+from blancops.math.units import *  # noqa: F401,F403

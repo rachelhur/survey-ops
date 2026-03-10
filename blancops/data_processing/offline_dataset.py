@@ -5,8 +5,8 @@ from collections import defaultdict
 
 from tqdm import tqdm
 
-from survey_ops.utils import ephemerides
-from survey_ops.data_processing.data_processing import *
+from blancops.utils import ephemerides
+from blancops.data_processing.data_processing import *
 import pandas as pd
 import json
 from torch.utils.data import random_split, RandomSampler

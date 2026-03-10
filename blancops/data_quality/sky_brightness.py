@@ -1,6 +1,6 @@
 from pathlib import Path
 from skybright.skybright import MoonSkyModel
-from survey_ops.utils import units
+from blancops.utils import units
 from astropy.time import Time
 import numpy as np
 from configparser import ConfigParser
@@ -24,7 +24,7 @@ def estimate_sky_brightness(time, ra, dec, band, config_path=None):
         Name of filter (e.g., 'u', 'g', 'r', 'i', 'z', 'Y').
     config_path : str or Path, optional
         Path to the sky brightness configuration file. If not provided, uses the default
-        'decam_sky.conf' under 'survey_ops/blanco/'.
+        'decam_sky.conf' under 'blancops/blanco/'.
 
     Returns
     -------

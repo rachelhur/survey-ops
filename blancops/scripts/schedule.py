@@ -12,14 +12,14 @@ import os
 import pickle
 import json
 
-from survey_ops.plotting.plotting import plot_schedule_from_file
-from survey_ops.core_rl.agents import Agent
-from survey_ops.utils.sys_utils import seed_everything, load_global_config, load_model_config, get_workspace_dir
-from survey_ops.algorithms.factory import setup_algorithm
-from survey_ops.utils.sys_utils import setup_logger, get_device
-from survey_ops.data_processing.data_processing import load_raw_data_to_dataframe, get_nautical_twilight, NUM_FILTERS
-from survey_ops.core_rl.environments import OnlineDECamEnv
-from survey_ops.data_processing.data_processing import expand_feature_names_for_cyclic_norm
+from blancops.plotting.plotting import plot_schedule_from_file
+from blancops.core_rl.agents import Agent
+from blancops.utils.sys_utils import seed_everything, load_global_config, load_model_config, get_workspace_dir
+from blancops.algorithms.factory import setup_algorithm
+from blancops.utils.sys_utils import setup_logger, get_device
+from blancops.data_processing.data_processing import load_raw_data_to_dataframe, get_nautical_twilight, NUM_FILTERS
+from blancops.core_rl.environments import OnlineDECamEnv
+from blancops.data_processing.data_processing import expand_feature_names_for_cyclic_norm
 from datetime import datetime, timedelta
 
 import logging

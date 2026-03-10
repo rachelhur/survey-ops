@@ -1,3 +1,3 @@
-"""Compatibility shim for interpolation helpers moved to survey_ops.math."""
+"""Compatibility shim for interpolation helpers moved to blancops.math."""
 
-from survey_ops.math.interpolate import *  # noqa: F401,F403
+from blancops.math.interpolate import *  # noqa: F401,F403

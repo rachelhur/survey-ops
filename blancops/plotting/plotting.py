@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from survey_ops.utils import units, ephemerides
+from blancops.utils import units, ephemerides
 import tempfile, os, shutil, glob
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt

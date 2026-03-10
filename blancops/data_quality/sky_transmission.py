@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
-from survey_ops.data_quality.sky_brightness import _CONFIG_PATH
-from survey_ops.utils import units
+from blancops.data_quality.sky_brightness import _CONFIG_PATH
+from blancops.utils import units
 from configparser import ConfigParser
 
 

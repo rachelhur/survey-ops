@@ -4,17 +4,17 @@ import gymnasium as gym
 import numpy as np
 import pandas as pd
 import math
-from survey_ops.data_processing.data_processing import get_nautical_twilight
+from blancops.data_processing.data_processing import get_nautical_twilight
 
-from survey_ops.data_processing.data_processing import normalize_noncyclic_features, normalize_timestamp
-from survey_ops.utils import ephemerides, units
-from survey_ops.utils.interpolate import interpolate_on_sphere
+from blancops.data_processing.data_processing import normalize_noncyclic_features, normalize_timestamp
+from blancops.utils import ephemerides, units
+from blancops.utils.interpolate import interpolate_on_sphere
 import random
-from survey_ops.utils.geometry import angular_separation
-from survey_ops.core_rl.survey_logic import get_fields_in_bin
-from survey_ops.data_processing.offline_dataset import setup_feature_names
-from survey_ops.data_processing.data_processing import *
-from survey_ops.utils import geometry
+from blancops.utils.geometry import angular_separation
+from blancops.core_rl.survey_logic import get_fields_in_bin
+from blancops.data_processing.offline_dataset import setup_feature_names
+from blancops.data_processing.data_processing import *
+from blancops.utils import geometry
 
 from astropy.time import Time
 from datetime import datetime, timezone
