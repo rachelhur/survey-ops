@@ -491,6 +491,7 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
     do_dec = "dec" in base_bin_feature_names
     do_az = "az" in base_bin_feature_names
     do_el = "el" in base_bin_feature_names
+    do_coords = do_ra or do_dec or do_az or do_el
     
     # Initialize arrays only for features we need
     calculated_features = {}
@@ -504,15 +505,23 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
     if do_moon_dist:
         calculated_features['moon_distance'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)
         logger.debug(f"Calculating moon distance for {n_timestamps} timestamps and {n_bins} bins")
-    if do_ra or do_az:
-        calculated_features['xs'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # az or ra
-        logger.debug(f"Calculating xs for {n_timestamps} timestamps and {n_bins} bins")
-    if do_dec or do_el:
-        calculated_features['ys'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # el or dec
-        logger.debug(f"Calculating ys for {n_timestamps} timestamps and {n_bins} bins")
+    if do_ra or do_dec:
+        calculated_features['ra'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # az or ra
+        calculated_features['dec'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # az or ra
+        logger.debug(f"Calculating ra/dec for {n_timestamps} timestamps and {n_bins} bins")
+    if do_az or do_el:
+        calculated_features['az'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # el or dec
+        calculated_features['el'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)  # el or dec
+        logger.debug(f"Calculating az/el for {n_timestamps} timestamps and {n_bins} bins")
     if do_angular_distance_to_pointing:
         calculated_features['angular_distance_to_pointing'] = np.empty(shape=(n_timestamps, n_bins), dtype=np.float32)
-    
+        if hpGrid.is_azel:
+            target_lons = pt_df['az'].values
+            target_lats = pt_df['el'].values
+        else:
+            target_lons = pt_df['ra'].values
+            target_lats = pt_df['dec'].values
+            
     # Calculate per-timestamp features
     lon, lat = hpGrid.lon, hpGrid.lat
     for i, time in tqdm(enumerate(timestamps), total=n_timestamps, desc='Calculating bin features for all healpix bins and timestamps'):
@@ -523,42 +532,26 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
         if do_moon_dist:
             calculated_features['moon_distance'][i] = hpGrid.get_source_angular_separations('moon', time=time)
         if do_angular_distance_to_pointing:
-            if hpGrid.is_azel:
-                current_lon, current_lat = pt_df.iloc[i]['az'], pt_df.iloc[i]['el']
-            else:
-                current_lon, current_lat = pt_df.iloc[i]['ra'], pt_df.iloc[i]['dec']
-            calculated_features['angular_distance_to_pointing'][i] = hpGrid.get_angular_separations(lon=current_lon, lat=current_lat)
+            calculated_features['angular_distance_to_pointing'][i] = hpGrid.get_angular_separations(lon=target_lons[i], lat=target_lats[i])
         
         # Coordinate transformations
-        if hpGrid.is_azel and (do_ra or do_dec):
-            xs, ys = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
-            if do_ra:
-                calculated_features['xs'][i] = xs
-            if do_dec:
-                calculated_features['ys'][i] = ys
-        elif not hpGrid.is_azel and (do_az or do_el):
-            xs, ys = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
-            if do_az:
-                calculated_features['xs'][i] = xs
-            if do_el:
-                calculated_features['ys'][i] = ys
-        
+        if do_coords:
+            if hpGrid.is_azel:
+                if 'az' in calculated_features: calculated_features['az'][i] = lon
+                if 'el' in calculated_features: calculated_features['el'][i] = lat
+                # ONLY calculate RA/DEC if they were actually requested
+                if do_ra or do_dec: 
+                    calculated_features['ra'][i], calculated_features['dec'][i] = ephemerides.topographic_to_equatorial(az=lon, el=lat, time=time)
+            else:
+                if 'ra' in calculated_features: calculated_features['ra'][i] = lon
+                if 'dec' in calculated_features: calculated_features['dec'][i] = lat
+                if do_az or do_el:
+                    calculated_features['az'][i], calculated_features['el'][i] = ephemerides.equatorial_to_topographic(ra=lon, dec=lat, time=time)
+
     # Calculate night-based features if needed
     if do_history_based_features:
         calculated_night_history_features = calculate_history_dependent_bin_features(pt_df=pt_df, hpGrid=hpGrid, field2radec=field2radec, night2visithistory=night2fieldvisits, field2maxvisits=field2maxvisits)
         calculated_features = calculated_features | calculated_night_history_features
-    # Map coordinate features to their proper names based on grid type
-    if 'xs' in calculated_features:
-        if hpGrid.is_azel:
-            calculated_features['ra'] = calculated_features['xs']
-        else:
-            calculated_features['az'] = calculated_features['xs']
-    
-    if 'ys' in calculated_features:
-        if hpGrid.is_azel:
-            calculated_features['dec'] = calculated_features['ys']
-        else:
-            calculated_features['el'] = calculated_features['ys']
     
     # Dynamically stack features in the order they appear in base_bin_feature_names
     # First, determine the unique feature types and their order
@@ -587,38 +580,8 @@ def calculate_and_add_bin_features(pt_df, datetimes, hpGrid, base_bin_feature_na
     else:
         bin_states = np.empty((n_timestamps, 0))
     
-    # ------------- from previous implementation -----------------#
-    # # Create DataFrame
-    # bin_df = pd.DataFrame(data=bin_states, columns=prenorm_bin_feature_names)
-    # bin_df['night'] = (datetimes - pd.Timedelta(hours=12)).dt.normalize()
-    # bin_df['timestamp'] = timestamps
-    
-    # # Normalize periodic features
-    # new_cols = {}
-    
-    # if do_cyclical_norm:
-    #     for feat_name in tqdm(prenorm_bin_feature_names, total=len(prenorm_bin_feature_names), desc='Normalizing bin features'):
-    #         if any(string in feat_name and 'frac' not in feat_name for string in cyclical_feature_names):
-    #             new_cols[f'{feat_name}_cos'] = np.cos(bin_df[feat_name].values)
-    #             new_cols[f'{feat_name}_sin'] = np.sin(bin_df[feat_name].values)
-
-    # new_cols_df = pd.DataFrame(data=new_cols)
-    # bin_df = pd.concat([bin_df, new_cols_df], axis=1)
-    
-    # bin_df = bin_df.sort_values(by='timestamp')
-    # bin_df = bin_df.reset_index(drop=True, inplace=False)
-    
-    # # Make sure there are no missing columns
-    # missing_cols = set(bin_feature_names) - set(bin_df.columns)
-    # assert len(missing_cols) == 0, f'Features {missing_cols} do not exist in dataframe. These are not yet implemented in method self._get_bin_features()'
-    
-    # # Ensure all data are 32-bit precision before training
-    # for str_bit, np_bit in zip(['float64', 'int64'], [np.float32, np.int32]): 
-    #     cols = bin_df.select_dtypes(include=[str_bit]).columns
-    #     bin_df[cols] = bin_df[cols].astype(np_bit)
-    # ------------- from previous implementation -----------------#
-
     final_col_names = prenorm_bin_feature_names.copy()
+
     if do_cyclical_norm:
         cyclical_cols = []
         cyclical_names = []
