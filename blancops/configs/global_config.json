@@ -63,8 +63,8 @@
     "FIELD2FILTERS": "field2filters.pkl"
   },
   "paths": {
-    "LOOKUP_DIR": "/home/hurra/Projects/survey-ops/data/lookups/",
-    "FITS_DIR": "/home/hurra/Projects/survey-ops/data/fits/",
-    "blancops": "/home/hurra/Projects/survey-ops/"
+    "LOOKUP_DIR": "/home/hurra/Projects/blancops/data/lookups/",
+    "FITS_DIR": "/home/hurra/Projects/blancops/data/fits/",
+    "blancops": "/home/hurra/Projects/blancops/"
     }
 }
