@@ -11,6 +11,7 @@ import pandas as pd
 import json
 from torch.utils.data import random_split, RandomSampler
 import pickle
+import gc
 
 # Get the logger associated with this module's name (e.g., 'my_module')
 import logging
@@ -159,15 +160,15 @@ class OfflineDataset(torch.utils.data.Dataset):
         self.num_transitions = num_transitions
 
         # # Save Transitions as tensors
-        self.states = torch.tensor(states, dtype=torch.float32)
-        self.next_states = torch.tensor(next_states, dtype=torch.float32)
-        self.bin_actions = torch.tensor(bin_actions, dtype=torch.int32)
-        self.rewards = torch.tensor(rewards, dtype=torch.float32)
-        self.dones = torch.tensor(dones, dtype=torch.bool)
-        self.action_masks = torch.tensor(action_masks, dtype=torch.bool)
+        self.states = torch.as_tensor(states, dtype=torch.float32)
+        self.next_states = torch.as_tensor(next_states, dtype=torch.float32)
+        self.bin_actions = torch.as_tensor(bin_actions, dtype=torch.int32)
+        self.rewards = torch.as_tensor(rewards, dtype=torch.float32)
+        self.dones = torch.as_tensor(dones, dtype=torch.bool)
+        self.action_masks = torch.as_tensor(action_masks, dtype=torch.bool)
         if include_bin_features:
-            self.bin_states = torch.tensor(bin_states, dtype=torch.float32)
-            self.next_bin_states = torch.tensor(next_bin_states, dtype=torch.float32)
+            self.bin_states = torch.as_tensor(bin_states, dtype=torch.float32)
+            self.next_bin_states = torch.as_tensor(next_bin_states, dtype=torch.float32)
         else:
             self.bin_states = None
             self.next_bin_states = None
@@ -433,8 +434,8 @@ class OfflineDataset(torch.utils.data.Dataset):
                 self.next_states[idx],
                 self.dones[idx],
                 self.action_masks[idx],
-                torch.tensor(0), # placeholder for bin state since not used in this case
-                torch.tensor(0)
+                torch.as_tensor(0), # placeholder for bin state since not used in this case
+                torch.as_tensor(0)
             )
         elif self._grid_network in ['single_bin_scorer', 'multi_dim_scorer']:
             transition = (
